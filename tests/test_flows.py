@@ -112,6 +112,28 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.gitea.comments, [])
         self.assertEqual(self.gitea.reviews, [])
 
+    def test_superseded_runs_do_not_review(self):
+        event = {"action": "synchronize", "pull_request": {"number": 7, "head": {"sha": "0000000older0000"}}}
+        self.assertEqual(main.dispatch(config(self.workspace, "pull_request", event), self.gitea.client()), 0)
+        self.assertEqual(self.prompts, [])
+        current = {"action": "synchronize", "pull_request": {"number": 7, "head": {"sha": "abcdef1234567890"}}}
+        main.dispatch(config(self.workspace, "pull_request", current), self.gitea.client())
+        self.assertEqual(len(self.prompts), 1)
+
+    def test_edits_only_review_when_the_wip_marker_is_removed(self):
+        def edited(old_title, new_title):
+            self.gitea.pull["title"] = new_title
+            event = {"action": "edited", "changes": {"title": {"from": old_title}},
+                     "pull_request": {"number": 7, "title": new_title}}
+            return main.dispatch(config(self.workspace, "pull_request", event), self.gitea.client())
+        edited("Add feature", "Add feature v2")
+        self.assertEqual(self.prompts, [])
+        body_only = {"action": "edited", "changes": {"body": {"from": "x"}}, "pull_request": {"number": 7, "title": "Add"}}
+        main.dispatch(config(self.workspace, "pull_request", body_only), self.gitea.client())
+        self.assertEqual(self.prompts, [])
+        edited("WIP: Add feature", "Add feature")
+        self.assertEqual(len(self.prompts), 1)
+
     def mention(self, author: str, body: str, is_pull: bool = True) -> int:
         event = {
             "action": "created",

@@ -3,16 +3,24 @@ name: Claude
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # edited: only re-reviews when the title loses its "WIP:" marker.
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   issue_comment:
     types: [created]
 
 jobs:
   claude:
     # Comment events only start a job when the trigger phrase is present.
-    if: github.event_name == 'pull_request' || contains(github.event.comment.body, '@claude')
+    # Replace claude-bot with your bot account: its replies quote the question.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude-bot')
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # A new push cancels the running review of the same PR; each comment runs on its own.
+    concurrency:
+      group: claude-${{ github.event_name }}-${{ github.event.comment.id || github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:

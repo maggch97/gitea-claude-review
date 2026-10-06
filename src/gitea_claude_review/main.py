@@ -164,7 +164,7 @@ def gate(cfg: Config, answer: claude.ClaudeAnswer) -> int:
 
 # ── modes ────────────────────────────────────────────────────────────────
 
-def review_pull(cfg: Config, gitea: Gitea, number: int) -> int:
+def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> int:
     log(f"Reviewing pull request #{number}")
     pr = gitea.pull(number)
     if pr.get("draft") or WIP_RE.match(pr.get("title") or ""):
@@ -174,6 +174,11 @@ def review_pull(cfg: Config, gitea: Gitea, number: int) -> int:
         log("Draft / WIP pull request: review skipped.")
         return 0
     head_sha = (pr.get("head") or {}).get("sha", "")
+    # Review only the commit this run was triggered for. If the branch moved on,
+    # the run for the newer push reviews it; two runs never review one commit.
+    if event_sha and head_sha and event_sha != head_sha:
+        log(f"Pull request moved from {event_sha[:12]} to {head_sha[:12]}; the newer run reviews it.")
+        return 0
     log(f"Checking out head {head_sha[:12]}")
     checkout_pull_head(cfg.workspace, number, head_sha, cfg.gitea_token)
     strip_checkout_credentials(cfg.workspace)
@@ -256,9 +261,21 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     return 0
 
 
+def title_unmarked_wip(event: dict) -> bool:
+    """An "edited" event that removed the WIP marker from the title."""
+    old = ((event.get("changes") or {}).get("title") or {}).get("from")
+    new = (event.get("pull_request") or {}).get("title") or ""
+    return old is not None and bool(WIP_RE.match(old)) and not WIP_RE.match(new)
+
+
 def dispatch(cfg: Config, gitea: Gitea) -> int:
     if cfg.event_name in ("pull_request", "pull_request_target"):
-        return review_pull(cfg, gitea, int((cfg.event.get("pull_request") or {}).get("number") or cfg.event.get("number")))
+        pull = cfg.event.get("pull_request") or {}
+        if cfg.event.get("action") == "edited" and not title_unmarked_wip(cfg.event):
+            log("Edit did not remove a WIP marker from the title; nothing to review.")
+            return 0
+        number = int(pull.get("number") or cfg.event.get("number"))
+        return review_pull(cfg, gitea, number, (pull.get("head") or {}).get("sha", ""))
     if cfg.event_name in ("issue_comment", "pull_request_review_comment"):
         if (cfg.event.get("action") or "created") != "created":
             log("Only newly created comments trigger Claude.")

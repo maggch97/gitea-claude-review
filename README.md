@@ -73,7 +73,7 @@ mirror this repository to your Gitea instance and point `uses:` at the mirror.
 
 | Event | What happens |
 |---|---|
-| `pull_request` | Skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run Claude with the rules and the findings this bot already posted → edit the summary comment → post new inline findings in one review. |
+| `pull_request` | Skip runs whose commit is no longer the PR head (a newer push reviews it), and `edited` events unless the title lost its `WIP:` marker → skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run Claude with the rules and the findings this bot already posted → if the PR moved on meanwhile, discard the results → edit the summary comment → post new inline findings in one review. |
 | `issue_comment` with the trigger phrase | Ignore the bot's own comments and commenters below `mention_permission` → on pull requests check out the head and provide the diff → Claude answers the request → reply comment, plus inline findings if any. |
 
 Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
