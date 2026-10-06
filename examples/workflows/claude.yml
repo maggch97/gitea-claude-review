@@ -1,0 +1,32 @@
+# .gitea/workflows/claude.yml
+name: Claude
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude:
+    # Comment events only start a job when the trigger phrase is present.
+    if: github.event_name == 'pull_request' || contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Keep the job token out of .git/config; the action fetches with its own token.
+          persist-credentials: false
+
+      - uses: https://github.com/maggch97/gitea-claude-review@v0
+        with:
+          gitea_token: ${{ secrets.CLAUDE_GITEA_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_version: stable
+          # model: opus
+          # language: Simplified Chinese
+          # rules_file: .gitea/claude/REVIEW.md
+          # fail_on: blocker

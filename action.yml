@@ -1,0 +1,139 @@
+name: Gitea Claude Review
+description: Claude Code pull request review and @mention replies for Gitea Actions — summary comment, inline findings, no third-party action.
+author: maggch97
+branding:
+  icon: eye
+  color: green
+
+inputs:
+  gitea_token:
+    description: Token of the bot account that posts comments (needs repository read + issue / pull request write). Never passed to Claude.
+    required: true
+  claude_code_oauth_token:
+    description: Claude subscription token from `claude setup-token`. Provide this or anthropic_api_key.
+    required: false
+    default: ""
+  anthropic_api_key:
+    description: Anthropic API key. Provide this or claude_code_oauth_token.
+    required: false
+    default: ""
+  anthropic_base_url:
+    description: Optional Anthropic-compatible endpoint.
+    required: false
+    default: ""
+  model:
+    description: Model id or alias passed to Claude Code (empty = Claude Code default).
+    required: false
+    default: ""
+  claude_code_version:
+    description: Claude Code version to install (e.g. 2.1.284), or stable / latest. Pin it for reproducible reviews.
+    required: false
+    default: stable
+  claude_code_executable:
+    description: Use an existing Claude Code binary instead of installing one.
+    required: false
+    default: ""
+  rules_file:
+    description: Repository-relative file with review rules (your REVIEW.md). Missing file = built-in generic rules.
+    required: false
+    default: .gitea/claude/REVIEW.md
+  extra_prompt:
+    description: Extra instructions appended to the rules.
+    required: false
+    default: ""
+  language:
+    description: Language of the comments, e.g. "Simplified Chinese". Empty = model default.
+    required: false
+    default: ""
+  trigger_phrase:
+    description: Phrase that triggers a reply in issue / pull request comments.
+    required: false
+    default: "@claude"
+  mention_permission:
+    description: Minimum repository permission of a commenter allowed to trigger Claude (read / write / admin).
+    required: false
+    default: write
+  max_turns:
+    description: Maximum agent turns per run.
+    required: false
+    default: "30"
+  timeout_minutes:
+    description: Timeout of the Claude run in minutes.
+    required: false
+    default: "30"
+  allowed_bash:
+    description: Comma-separated Bash patterns Claude may run (read-only git by default).
+    required: false
+    default: "git diff:*,git log:*,git show:*,git blame:*,git grep:*,git status:*"
+  inline_comments:
+    description: Post findings as inline review comments (true / false).
+    required: false
+    default: "true"
+  wip_policy:
+    description: Draft or "WIP:" pull requests — skip (default) or fail.
+    required: false
+    default: skip
+  fail_on:
+    description: Fail the job when a finding reaches this severity (none / low / medium / high / blocker).
+    required: false
+    default: none
+  fail_on_error:
+    description: Fail the job when the review itself errors (default false — a warning is emitted instead).
+    required: false
+    default: "false"
+  show_cost:
+    description: Show cost and turns in the comment footer.
+    required: false
+    default: "false"
+  server_url:
+    description: Gitea base URL. Defaults to the server the workflow runs on.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Claude Code
+      id: claude
+      shell: bash
+      env:
+        CLAUDE_VERSION: ${{ inputs.claude_code_version }}
+        CLAUDE_EXECUTABLE: ${{ inputs.claude_code_executable }}
+      run: |
+        set -euo pipefail
+        if [ -n "$CLAUDE_EXECUTABLE" ]; then
+          echo "bin=$CLAUDE_EXECUTABLE" >> "$GITHUB_OUTPUT"
+          "$CLAUDE_EXECUTABLE" --version
+          exit 0
+        fi
+        curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_VERSION"
+        bin="$HOME/.local/bin/claude"
+        "$bin" --version
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+    - name: Review with Claude
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/src
+        PYTHONUNBUFFERED: "1"
+        GCR_GITEA_TOKEN: ${{ inputs.gitea_token }}
+        GCR_SERVER_URL: ${{ inputs.server_url }}
+        GCR_CLAUDE_BIN: ${{ steps.claude.outputs.bin }}
+        GCR_MODEL: ${{ inputs.model }}
+        GCR_RULES_FILE: ${{ inputs.rules_file }}
+        GCR_EXTRA_PROMPT: ${{ inputs.extra_prompt }}
+        GCR_LANGUAGE: ${{ inputs.language }}
+        GCR_TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
+        GCR_MENTION_PERMISSION: ${{ inputs.mention_permission }}
+        GCR_MAX_TURNS: ${{ inputs.max_turns }}
+        GCR_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        GCR_ALLOWED_BASH: ${{ inputs.allowed_bash }}
+        GCR_INLINE_COMMENTS: ${{ inputs.inline_comments }}
+        GCR_WIP_POLICY: ${{ inputs.wip_policy }}
+        GCR_FAIL_ON: ${{ inputs.fail_on }}
+        GCR_FAIL_ON_ERROR: ${{ inputs.fail_on_error }}
+        GCR_SHOW_COST: ${{ inputs.show_cost }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        ANTHROPIC_BASE_URL: ${{ inputs.anthropic_base_url }}
+      run: python3 -m gitea_claude_review
