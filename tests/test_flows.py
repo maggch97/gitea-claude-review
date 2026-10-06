@@ -103,6 +103,15 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.review(fail_on="high"), 1)
         self.assertEqual(self.review(fail_on="blocker"), 0)
 
+    def test_results_are_discarded_when_the_pull_request_moved_on(self):
+        def model(cfg, prompt):
+            self.gitea.pull["head"]["sha"] = "fffffffffff00000"  # someone pushed meanwhile
+            return self.answer
+        with mock.patch.object(main, "run_model", side_effect=model):
+            self.assertEqual(self.review(), 0)
+        self.assertEqual(self.gitea.comments, [])
+        self.assertEqual(self.gitea.reviews, [])
+
     def mention(self, author: str, body: str, is_pull: bool = True) -> int:
         event = {
             "action": "created",

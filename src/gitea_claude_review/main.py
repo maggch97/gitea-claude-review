@@ -187,6 +187,12 @@ def review_pull(cfg: Config, gitea: Gitea, number: int) -> int:
         repo_rules=read_rules(cfg), language=cfg.language, previous=previous,
     )
     answer = run_model(cfg, prompt)
+    # A push during the run makes these results stale; the run for the new head
+    # posts instead, so an older review never overwrites a newer summary.
+    latest = (gitea.pull(number).get("head") or {}).get("sha", "")
+    if latest and latest != head_sha:
+        log(f"Pull request moved to {latest[:12]} while reviewing {head_sha[:12]}; discarding stale results.")
+        return 0
     stats = publish.publish_review(
         gitea, number, head_sha, bot, answer, parse_unified_diff(diff_text),
         publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost),
