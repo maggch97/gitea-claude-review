@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -142,7 +143,10 @@ def write_diff(cfg: Config, number: int, diff_text: str) -> str:
 
 def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
     cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)
+    log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns)")
+    started = time.monotonic()
     answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
+    log(f"Claude finished in {time.monotonic() - started:.0f}s with {len(answer.findings)} finding(s)")
     if not answer.structured:
         annotate("warning", "Claude did not return the JSON block; posting its text as the summary.")
     return answer
@@ -161,6 +165,7 @@ def gate(cfg: Config, answer: claude.ClaudeAnswer) -> int:
 # ── modes ────────────────────────────────────────────────────────────────
 
 def review_pull(cfg: Config, gitea: Gitea, number: int) -> int:
+    log(f"Reviewing pull request #{number}")
     pr = gitea.pull(number)
     if pr.get("draft") or WIP_RE.match(pr.get("title") or ""):
         if cfg.wip_policy == "fail":
@@ -169,12 +174,14 @@ def review_pull(cfg: Config, gitea: Gitea, number: int) -> int:
         log("Draft / WIP pull request: review skipped.")
         return 0
     head_sha = (pr.get("head") or {}).get("sha", "")
+    log(f"Checking out head {head_sha[:12]}")
     checkout_pull_head(cfg.workspace, number, head_sha, cfg.gitea_token)
     strip_checkout_credentials(cfg.workspace)
 
     bot = gitea.current_user()["login"]
     diff_text = gitea.pull_diff(number)
     already, previous = publish.posted_findings(gitea, number, bot)
+    log(f"Diff: {len(changed_files(diff_text))} file(s); {len(already)} finding(s) already posted by @{bot}")
     prompt = prompts.review_prompt(
         pr=pr, diff_file=write_diff(cfg, number, diff_text), changed=changed_files(diff_text),
         repo_rules=read_rules(cfg), language=cfg.language, previous=previous,

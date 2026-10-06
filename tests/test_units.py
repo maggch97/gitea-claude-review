@@ -12,6 +12,7 @@ from helpers import DIFF
 from gitea_claude_review import claude
 from gitea_claude_review.claude import Finding, parse_answer
 from gitea_claude_review.diff import changed_files, parse_unified_diff
+from gitea_claude_review.gitea import Gitea, GiteaError
 from gitea_claude_review.publish import fingerprint, split_anchorable
 
 
@@ -89,6 +90,43 @@ class AnchorTest(unittest.TestCase):
         a = Finding("src/app.py", 3, "new", "high", "Off  by one", "x")
         b = Finding("src/app.py", 9, "new", "low", "off by ONE", "y")
         self.assertEqual(fingerprint(a), fingerprint(b))
+
+
+class RetryTest(unittest.TestCase):
+    def client(self, responses):
+        calls = []
+
+        def transport(method, url, headers, data):
+            calls.append(method)
+            result = responses.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        sleeps = []
+        gitea = Gitea("https://git.example.com", "t", "team", "app", transport=transport, sleep=sleeps.append)
+        return gitea, calls, sleeps
+
+    def test_reads_retry_on_gateway_errors_and_timeouts(self):
+        gitea, calls, sleeps = self.client([(502, b"bad gateway"), TimeoutError("read timed out"), (200, b'{"login": "bot"}')])
+        self.assertEqual(gitea.current_user(), {"login": "bot"})
+        self.assertEqual(calls, ["GET", "GET", "GET"])
+        self.assertEqual(sleeps, [3, 10])
+
+    def test_reads_give_up_with_the_path_in_the_error(self):
+        gitea, _, _ = self.client([TimeoutError("t1"), TimeoutError("t2"), TimeoutError("t3")])
+        with self.assertRaisesRegex(GiteaError, r"GET /user got no response: request failed after 3 attempt"):
+            gitea.current_user()
+
+    def test_writes_are_never_retried(self):
+        gitea, calls, sleeps = self.client([TimeoutError("read timed out")])
+        with self.assertRaisesRegex(GiteaError, r"POST /repos/team/app/issues/7/comments"):
+            gitea.create_comment(7, "hi")
+        self.assertEqual((calls, sleeps), (["POST"], []))
+        gitea, calls, _ = self.client([(502, b"bad gateway")])
+        with self.assertRaises(GiteaError):
+            gitea.create_comment(7, "hi")
+        self.assertEqual(calls, ["POST"])
 
 
 class SubprocessTest(unittest.TestCase):

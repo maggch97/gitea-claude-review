@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,28 +14,53 @@ Transport = Callable[[str, str, "dict[str, str]", Optional[bytes]], "tuple[int, 
 
 class GiteaError(RuntimeError):
     def __init__(self, status: int, method: str, path: str, body: str):
-        super().__init__(f"Gitea API {method} {path} returned HTTP {status}: {body[:300]}")
+        what = f"returned HTTP {status}" if status else "got no response"
+        super().__init__(f"Gitea API {method} {path} {what}: {body[:300]}")
         self.status = status
+
+
+REQUEST_TIMEOUT_S = 120
+RETRY_DELAYS_S = (3, 10)  # reads only: 3 attempts in total
+RETRYABLE_STATUS = {502, 503, 504}
 
 
 def _urllib_transport(method: str, url: str, headers: dict[str, str], data: bytes | None) -> tuple[int, bytes]:
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_S) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:
         return error.code, error.read()
 
 
 class Gitea:
-    def __init__(self, server_url: str, token: str, owner: str, repo: str, transport: Transport | None = None):
+    def __init__(self, server_url: str, token: str, owner: str, repo: str, transport: Transport | None = None,
+                 sleep: Callable[[float], None] = time.sleep):
         self.api = server_url.rstrip("/") + "/api/v1"
         self.owner = owner
         self.repo = repo
         self._token = token
         self._transport = transport or _urllib_transport
+        self._sleep = sleep
 
     # ── plumbing ──────────────────────────────────────────────────────
+
+    def _send(self, method: str, path: str, headers: dict[str, str], data: bytes | None) -> tuple[int, bytes]:
+        """Reads are retried on timeouts and gateway errors; writes never (no double posts)."""
+        attempts = 1 + (len(RETRY_DELAYS_S) if method == "GET" else 0)
+        for attempt in range(attempts):
+            try:
+                status, payload = self._transport(method, self.api + path, headers, data)
+            except (OSError, urllib.error.URLError) as error:  # timeouts, resets, DNS
+                if attempt + 1 >= attempts:
+                    raise GiteaError(0, method, path, f"request failed after {attempts} attempt(s): {error}") from error
+            else:
+                if status not in RETRYABLE_STATUS or attempt + 1 >= attempts:
+                    return status, payload
+            delay = RETRY_DELAYS_S[attempt]
+            print(f"Gitea {method} {path} did not answer in time; retrying in {delay}s", flush=True)
+            self._sleep(delay)
+        raise AssertionError("unreachable")
 
     def _request(self, method: str, path: str, body: Any = None, *, raw: bool = False, accept_404: bool = False) -> Any:
         headers = {"Authorization": f"token {self._token}", "Accept": "text/plain" if raw else "application/json"}
@@ -42,7 +68,7 @@ class Gitea:
         if body is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(body).encode("utf-8")
-        status, payload = self._transport(method, self.api + path, headers, data)
+        status, payload = self._send(method, path, headers, data)
         if accept_404 and status == 404:
             return None
         if status < 200 or status >= 300:
