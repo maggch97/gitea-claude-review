@@ -17,9 +17,10 @@ jobs:
       (contains(github.event.comment.body, '@claude') && github.event.comment.user.login != 'claude-bot')
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # A new push cancels the running review of the same PR; each comment runs on its own.
+    # A new push cancels the running review of the same PR; edits and comments never
+    # cancel a review (separate groups), and each comment runs on its own.
     concurrency:
-      group: claude-${{ github.event_name }}-${{ github.event.comment.id || github.event.pull_request.number }}
+      group: claude-${{ github.event_name }}-${{ github.event.action }}-${{ github.event.comment.id || github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
