@@ -46,6 +46,14 @@ class FakeGitea:
         self.reviews: list[dict] = []
         self.calls: list[tuple[str, str, object]] = []
         self.next_id = 100
+        self.version = "1.25.5"
+
+    def review_comment(self, comment_id: int) -> dict | None:
+        for review in self.reviews:
+            for comment in review["comments"]:
+                if comment["id"] == comment_id:
+                    return comment
+        return None
 
     def transport(self, method: str, url: str, headers: dict, data: bytes | None):
         assert headers["Authorization"] == "token secret-token"
@@ -57,6 +65,8 @@ class FakeGitea:
         query = path.split("?", 1)[1] if "?" in path else ""
         if p == "/user":
             return 200, json.dumps({"login": self.bot}).encode()
+        if p == "/version":
+            return 200, json.dumps({"version": self.version}).encode()
         m = re.fullmatch(base + r"/collaborators/([^/]+)/permission", p)
         if m:
             perm = self.permissions.get(m.group(1))
@@ -75,11 +85,21 @@ class FakeGitea:
             return 201, json.dumps(item).encode()
         m = re.fullmatch(base + r"/issues/comments/(\d+)", p)
         if m and method == "PATCH":
-            for c in self.comments:
+            # Issue comments and review (code) comments share this endpoint.
+            for c in self.comments + [rc for r in self.reviews for rc in r["comments"]]:
                 if c["id"] == int(m.group(1)):
                     c["body"] = body["body"]
                     return 200, json.dumps(c).encode()
             return 404, b"{}"
+        m = re.fullmatch(base + r"/pulls/comments/(\d+)/resolve", p)
+        if m and method == "POST":
+            if self.version.startswith("1.25"):
+                return 404, b"{}"  # no such route before Gitea 1.26
+            comment = self.review_comment(int(m.group(1)))
+            if comment is None:
+                return 404, b"{}"
+            comment["resolver"] = {"login": self.bot}
+            return 204, b""
         if p == f"{base}/pulls/7/reviews" and method == "GET":
             page = int(re.search(r"page=(\d+)", query).group(1)) if "page=" in query else 1
             data = [{"id": r["id"], "user": r["user"]} for r in self.reviews]
@@ -87,7 +107,11 @@ class FakeGitea:
         if p == f"{base}/pulls/7/reviews" and method == "POST":
             self.next_id += 1
             review = {"id": self.next_id, "user": {"login": self.bot}, "body": body["body"], "commit_id": body["commit_id"],
-                      "comments": body["comments"]}
+                      "comments": []}
+            for posted in body["comments"]:
+                self.next_id += 1
+                review["comments"].append(dict(posted, id=self.next_id, position=posted["new_position"],
+                                               original_position=posted["old_position"], resolver=None))
             self.reviews.append(review)
             return 200, json.dumps({"id": review["id"]}).encode()
         m = re.fullmatch(base + r"/pulls/7/reviews/(\d+)/comments", p)

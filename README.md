@@ -8,6 +8,9 @@ official [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI.
 - **One summary comment per pull request**, edited in place on every push.
 - **Inline findings** anchored to diff lines, de-duplicated across pushes; findings
   outside the diff go to the summary instead of being dropped.
+- **Fixed findings are closed out**: on every push Claude re-checks the open
+  findings; the fixed ones get a ✅ banner and are resolved (Gitea 1.26+, the first
+  version with a resolve API; older versions get the banner only).
 - **`@claude` in any issue or pull request comment** asks a question or a re-review.
 - **No third-party action and no dependencies**: a composite action that installs
   the Claude Code CLI and runs a small standard-library Python module.
@@ -73,14 +76,14 @@ mirror this repository to your Gitea instance and point `uses:` at the mirror.
 
 | Event | What happens |
 |---|---|
-| `pull_request` | Skip runs whose commit is no longer the PR head (a newer push reviews it), and `edited` events unless the title lost its `WIP:` marker → skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run Claude with the rules and the findings this bot already posted → if the PR moved on meanwhile, discard the results → edit the summary comment → post new inline findings in one review. |
+| `pull_request` | Skip runs whose commit is no longer the PR head (a newer push reviews it), and `edited` events unless the title lost its `WIP:` marker → skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run Claude with the rules and the bot's open findings → if the PR moved on meanwhile, discard the results → mark the findings Claude verified as fixed (banner, and resolve on Gitea 1.26+) → edit the summary comment → post new inline findings in one review. Findings a person resolved are never touched or posted again. |
 | `issue_comment` with the trigger phrase | Ignore the bot's own comments and commenters below `mention_permission` → on pull requests check out the head and provide the diff → Claude answers the request → reply comment, plus inline findings if any. |
 
 Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
 `Glob`, `LS` and the `allowed_bash` patterns; `Edit`, `Write`, `WebFetch`,
 `WebSearch` and sub-agents are denied. It must end its answer with a JSON block
-(`summary` + `findings[]`); a missing block is posted as plain text with a
-warning.
+(`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
+as fixed); a missing block is posted as plain text with a warning.
 
 ## Security notes
 

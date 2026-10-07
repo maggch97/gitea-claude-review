@@ -185,11 +185,13 @@ def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> 
 
     bot = gitea.current_user()["login"]
     diff_text = gitea.pull_diff(number)
-    already, previous = publish.posted_findings(gitea, number, bot)
-    log(f"Diff: {len(changed_files(diff_text))} file(s); {len(already)} finding(s) already posted by @{bot}")
+    posted = publish.posted_findings(gitea, number, bot)
+    still_open = [p for p in posted if p.open]
+    log(f"Diff: {len(changed_files(diff_text))} file(s); @{bot} posted {len(posted)} finding(s) before, "
+        f"{len(still_open)} still open")
     prompt = prompts.review_prompt(
         pr=pr, diff_file=write_diff(cfg, number, diff_text), changed=changed_files(diff_text),
-        repo_rules=read_rules(cfg), language=cfg.language, previous=previous,
+        repo_rules=read_rules(cfg), language=cfg.language, previous=still_open,
     )
     answer = run_model(cfg, prompt)
     # A push during the run makes these results stale; the run for the new head
@@ -198,10 +200,17 @@ def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> 
     if latest and latest != head_sha:
         log(f"Pull request moved to {latest[:12]} while reviewing {head_sha[:12]}; discarding stale results.")
         return 0
+    resolve_api = False
+    if answer.resolved:
+        version = gitea.version()
+        resolve_api = publish.supports_resolve_api(version)
+        if not resolve_api:
+            log(f"Gitea {version or '(unknown version)'} has no resolve API (needs 1.26+): "
+                "fixed findings get a banner but stay unresolved.")
     stats = publish.publish_review(
         gitea, number, head_sha, bot, answer, parse_unified_diff(diff_text),
         publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost),
-        already, inline=cfg.inline_comments,
+        posted, resolve_api, inline=cfg.inline_comments,
     )
     log(f"Review posted: {stats}")
     return gate(cfg, answer)
@@ -256,7 +265,7 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     text = f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
     gitea.create_comment(number, text)
     if anchored:
-        already, _ = publish.posted_findings(gitea, number, bot)
+        already = publish.suppressed(publish.posted_findings(gitea, number, bot))
         publish.post_inline(gitea, number, head_sha, anchored, already, "Claude: {count} inline finding(s) for @" + author + ".")
     return 0
 

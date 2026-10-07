@@ -10,10 +10,10 @@ from unittest import mock
 from helpers import DIFF
 
 from gitea_claude_review import claude
-from gitea_claude_review.claude import Finding, parse_answer
+from gitea_claude_review.claude import Finding, Resolution, parse_answer
 from gitea_claude_review.diff import changed_files, parse_unified_diff
 from gitea_claude_review.gitea import Gitea, GiteaError
-from gitea_claude_review.publish import fingerprint, split_anchorable
+from gitea_claude_review.publish import fingerprint, split_anchorable, supports_resolve_api
 
 
 class DiffTest(unittest.TestCase):
@@ -57,6 +57,14 @@ class AnswerTest(unittest.TestCase):
         self.assertFalse(raw.structured)
         self.assertEqual(raw.summary, "plain text only")
 
+    def test_parses_resolved_earlier_findings(self):
+        answer = parse_answer(
+            f'{claude.BEGIN}{{"summary": "s", "findings": [], "resolved": '
+            f'[{{"id": "123", "note": " now checked "}}, {{"id": "abc"}}, {{"note": "no id"}}, 7]}}{claude.END}'
+        )
+        self.assertEqual(answer.resolved, [Resolution(123, "now checked")])
+        self.assertEqual(parse_answer(f'{claude.BEGIN}{{"summary": "s"}}{claude.END}').resolved, [])
+
     def test_claude_env_drops_secrets_it_does_not_need(self):
         env = claude.claude_env({
             "PATH": "/bin", "HOME": "/home/r", "GCR_GITEA_TOKEN": "x", "GITHUB_TOKEN": "y", "GITEA_TOKEN": "z",
@@ -90,6 +98,11 @@ class AnchorTest(unittest.TestCase):
         a = Finding("src/app.py", 3, "new", "high", "Off  by one", "x")
         b = Finding("src/app.py", 9, "new", "low", "off by ONE", "y")
         self.assertEqual(fingerprint(a), fingerprint(b))
+
+    def test_resolve_api_needs_gitea_1_26(self):
+        for version, expected in [("1.25.5", False), ("1.26.0", True), ("1.27.3", True), ("1.26.0+dev-12-gabc", True),
+                                  ("28.1.0", True), ("", False), ("dev", False)]:
+            self.assertEqual(supports_resolve_api(version), expected, version)
 
 
 class RetryTest(unittest.TestCase):

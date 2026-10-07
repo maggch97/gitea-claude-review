@@ -9,7 +9,7 @@ from unittest import mock
 from helpers import FakeGitea
 
 from gitea_claude_review import main, publish
-from gitea_claude_review.claude import ClaudeAnswer, Finding
+from gitea_claude_review.claude import ClaudeAnswer, Finding, Resolution
 
 
 def config(workspace: str, event_name: str, event: dict, **overrides) -> main.Config:
@@ -82,7 +82,58 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(len([c for c in self.gitea.comments if publish.SUMMARY_MARKER in c["body"]]), 1)
         self.assertIn("Still one problem.", self.gitea.comments[0]["body"])
         self.assertEqual(len(self.gitea.reviews), 1)
-        self.assertIn("src/app.py: Wrong default", self.prompts[1])  # earlier finding given as context
+        posted_id = self.gitea.reviews[0]["comments"][0]["id"]
+        self.assertIn(f"id {posted_id}: `src/app.py` (line 3 when posted) — Wrong default", self.prompts[1])
+
+    def first_finding(self) -> dict:
+        """Run one review that posts the "Wrong default" finding; return its review comment."""
+        self.review()
+        return self.gitea.reviews[0]["comments"][0]
+
+    def push(self, sha: str, answer: ClaudeAnswer) -> None:
+        self.gitea.pull["head"]["sha"] = sha
+        self.answer = answer
+        self.assertEqual(self.review(), 0)
+
+    def test_fixed_findings_are_marked_and_resolved_on_gitea_1_26(self):
+        self.gitea.version = "1.26.0"
+        comment = self.first_finding()
+        self.push("1111111111110000", ClaudeAnswer(summary="Fixed.", resolved=[Resolution(comment["id"], "y is now 2.")]))
+        self.assertTrue(comment["body"].startswith("<!-- gitea-claude-review:fixed:111111111111 -->\n✅ **Fixed in `111111111111`**: y is now 2."))
+        self.assertIn("**[high] Wrong default**", comment["body"])  # original text kept below the banner
+        self.assertEqual(comment["resolver"], {"login": "review-bot"})
+        summary = self.gitea.comments[0]["body"]
+        self.assertIn("#### Fixed since the previous review\n- ✅ `src/app.py` — Wrong default\n  y is now 2.", summary)
+
+        # A fixed finding is no longer handed to Claude; if it comes back, it is posted again.
+        self.push("2222222222220000", ClaudeAnswer(summary="Regressed.", findings=[Finding("src/app.py", 3, "new", "high", "Wrong default", "back")]))
+        self.assertNotIn(f"id {comment['id']}", self.prompts[-1])
+        self.assertEqual(len(self.gitea.reviews), 2)
+        self.assertNotIn("Fixed since", self.gitea.comments[0]["body"])
+
+    def test_on_gitea_1_25_fixed_findings_only_get_the_banner(self):
+        comment = self.first_finding()
+        self.push("1111111111110000", ClaudeAnswer(summary="Fixed.", resolved=[Resolution(comment["id"], "")]))
+        self.assertIn("✅ **Fixed in `111111111111`**\n", comment["body"])
+        self.assertIsNone(comment["resolver"])
+        self.assertFalse(any(path.endswith("/resolve") for _, path, _ in self.gitea.calls))
+        self.push("2222222222220000", ClaudeAnswer(summary="ok"))
+        self.assertNotIn(f"id {comment['id']}", self.prompts[-1])
+
+    def test_only_open_findings_of_the_bot_can_be_marked_fixed(self):
+        self.gitea.version = "1.27.3"
+        comment = self.first_finding()
+        comment["resolver"] = {"login": "alice"}  # a person resolved it: their decision stands
+        before = comment["body"]
+        self.push("1111111111110000", ClaudeAnswer(
+            summary="s", resolved=[Resolution(comment["id"], "x"), Resolution(999999, "made up")],
+            findings=[Finding("src/app.py", 3, "new", "high", "Wrong default", "again")],
+        ))
+        self.assertEqual(comment["body"], before)
+        self.assertNotIn(f"id {comment['id']}", self.prompts[-1])
+        self.assertEqual(len(self.gitea.reviews), 1)  # accepted by a person: not posted again
+        self.assertFalse(any(m == "PATCH" and "/issues/comments/" in p and p.endswith(str(comment["id"]))
+                             for m, p, _ in self.gitea.calls))
 
     def test_repository_rules_file_is_used(self):
         rules = Path(self.workspace) / ".gitea" / "claude"

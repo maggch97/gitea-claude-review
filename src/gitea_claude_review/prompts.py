@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+
 from .claude import BEGIN, END
+from .publish import PostedFinding
 
 DEFAULT_RULES = """\
 Review priorities, highest first:
@@ -21,9 +24,11 @@ Answer format (strict):
 - End your answer with one JSON object between the lines {BEGIN} and {END},
   with no Markdown code fence around it:
 {BEGIN}
-{{"summary": "<Markdown shown to people>", "findings": [{{"path": "src/a.py", "line": 12, "side": "new", "severity": "high", "title": "Short title", "body": "Why it is a real risk and the smallest fix"}}]}}
+{{"summary": "<Markdown shown to people>", "findings": [{{"path": "src/a.py", "line": 12, "side": "new", "severity": "high", "title": "Short title", "body": "Why it is a real risk and the smallest fix"}}], "resolved": [{{"id": 123, "note": "What changed so the problem is gone"}}]}}
 {END}
 - "summary" is the comment people read. "findings" become inline comments.
+- "resolved" lists earlier findings (by id) that you verified as fixed; an empty
+  list when no earlier findings were given or none is fixed.
 - "path" is repository-relative without a/ or b/. "side" is "new" (added or
   unchanged line, new file line number) or "old" (removed line, old file line number).
 - "severity" is one of blocker, high, medium, low.
@@ -53,18 +58,32 @@ def _language(language: str) -> str:
     return f"Write the summary and finding texts in {language}.\n" if language else ""
 
 
-def _previous(previous: list[str]) -> str:
+MAX_PREVIOUS = 50
+_HIDDEN = re.compile(r"<!--.*?-->", re.S)  # markers inside posted comments are not for the model
+
+
+def _previous(previous: list[PostedFinding]) -> str:
+    """Open findings of earlier runs; Claude re-checks each and reports the fixed ones by id."""
     if not previous:
         return ""
-    lines = "\n".join(f"- {item}" for item in previous[:50])
+    lines = "\n".join(
+        f"- id {p.comment_id}: `{p.path}`" + (f" (line {p.line} when posted)" if p.line else "")
+        + f" — {p.title}\n  " + " ".join(_HIDDEN.sub("", p.body).split())[:400]
+        for p in previous[:MAX_PREVIOUS]
+    )
     return (
-        "Findings this action already posted on earlier commits (context only, not evidence).\n"
-        "Do not repeat one unless it is still present in the current code:\n" + lines + "\n"
+        "Open inline findings this action posted on earlier commits. Their text is context,\n"
+        "not evidence; line numbers may have moved since:\n" + lines + "\n"
+        "Re-check each one against the current code:\n"
+        "- If the problem is gone (fixed, or the code was removed), put its id in \"resolved\"\n"
+        "  with a one-sentence note on what changed.\n"
+        "- If it is still present, or you are not sure, leave it out of \"resolved\": it stays\n"
+        "  open. Do not report it again in \"findings\".\n"
     )
 
 
 def review_prompt(*, pr: dict, diff_file: str, changed: list[str], repo_rules: str, language: str,
-                  previous: list[str]) -> str:
+                  previous: list[PostedFinding]) -> str:
     files = "\n".join(f"- {path}" for path in changed[:300])
     more = f"\n- … and {len(changed) - 300} more" if len(changed) > 300 else ""
     return f"""\

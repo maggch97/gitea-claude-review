@@ -98,6 +98,9 @@ class Gitea:
     def current_user(self) -> dict[str, Any]:
         return self._request("GET", "/user")
 
+    def version(self) -> str:
+        return (self._request("GET", "/version") or {}).get("version", "")
+
     def permission(self, username: str) -> str:
         """Repository permission of a user: none / read / write / admin / owner."""
         data = self._request(
@@ -128,6 +131,10 @@ class Gitea:
 
     def review_comments(self, number: int, review_id: int) -> list[dict[str, Any]]:
         return self._request("GET", f"{self._repo}/pulls/{number}/reviews/{review_id}/comments") or []
+
+    def resolve_review_comment(self, comment_id: int) -> None:
+        """Mark a review conversation resolved (Gitea >= 1.26)."""
+        self._request("POST", f"{self._repo}/pulls/comments/{comment_id}/resolve")
 
     def create_review(self, number: int, commit_id: str, body: str, comments: list[dict[str, Any]]) -> dict[str, Any]:
         return self._request(

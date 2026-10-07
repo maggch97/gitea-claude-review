@@ -41,9 +41,18 @@ class Finding:
 
 
 @dataclass
+class Resolution:
+    """An earlier inline finding (by comment id) that Claude verified as fixed."""
+
+    comment_id: int
+    note: str
+
+
+@dataclass
 class ClaudeAnswer:
     summary: str
     findings: list[Finding] = field(default_factory=list)
+    resolved: list[Resolution] = field(default_factory=list)
     structured: bool = True
     cost_usd: float | None = None
     turns: int | None = None
@@ -90,6 +99,16 @@ def _finding(raw: Any) -> Finding | None:
     )
 
 
+def _resolution(raw: Any) -> Resolution | None:
+    if not isinstance(raw, dict):
+        return None
+    try:
+        comment_id = int(raw.get("id"))
+    except (TypeError, ValueError):
+        return None  # an id we cannot match to a posted comment is useless
+    return Resolution(comment_id=comment_id, note=str(raw.get("note", "")).strip()[:1000])
+
+
 def parse_answer(text: str) -> ClaudeAnswer:
     """Extract the JSON block; fall back to posting the raw text as the summary."""
     match = re.search(re.escape(BEGIN) + r"\s*(\{.*?\})\s*" + re.escape(END), text, re.S)
@@ -100,11 +119,12 @@ def parse_answer(text: str) -> ClaudeAnswer:
     except json.JSONDecodeError:
         return ClaudeAnswer(summary=text.strip(), structured=False)
     findings = [f for f in (_finding(x) for x in data.get("findings") or []) if f]
+    resolved = [r for r in (_resolution(x) for x in data.get("resolved") or []) if r]
     summary = str(data.get("summary") or "").strip()
     if not summary:
         # The model put prose outside the block: keep it.
         summary = (text[: match.start()] + text[match.end():]).strip()
-    return ClaudeAnswer(summary=summary, findings=findings)
+    return ClaudeAnswer(summary=summary, findings=findings, resolved=resolved)
 
 
 def run_claude(prompt: str, cmd: list[str], cwd: str, timeout_s: int) -> ClaudeAnswer:
