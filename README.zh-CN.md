@@ -47,6 +47,7 @@ Gitea 可以直接用 URL 引用 action。Runner 访问不了 GitHub 时，把�
 | `claude_code_version` | `stable` | 建议固定版本（如 `2.1.284`），结果可复现 |
 | `rules_file` | `.gitea/claude/REVIEW.md` | 仓库里的审查规则文件，不存在时用内置通用规则 |
 | `language` | — | 评论语言，例如 `Simplified Chinese` |
+| `review_id` | — | 评论标记的命名空间。同一个 PR 上要跑多条互不干扰的 review（如正确性 + 设计）时，给每条 workflow 不同的 id，并配不同的 `trigger_phrase` |
 | `mention_permission` | `write` | 评论里 @ 触发所需的最低仓库权限 |
 | `wip_policy` | `skip` | 草稿或 `WIP:` 标题的 PR：跳过或让流水线失败 |
 | `fail_on` | `none` | 有问题达到该级别时让任务失败，可做合并门禁 |

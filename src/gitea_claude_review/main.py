@@ -32,6 +32,7 @@ class Config:
     model: str = ""
     claude_bin: str = "claude"
     rules_file: str = ".gitea/claude/REVIEW.md"
+    review_id: str = ""
     extra_prompt: str = ""
     language: str = ""
     trigger_phrase: str = "@claude"
@@ -68,6 +69,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         model=get("MODEL"),
         claude_bin=get("CLAUDE_BIN") or "claude",
         rules_file=get("RULES_FILE") or ".gitea/claude/REVIEW.md",
+        review_id=get("REVIEW_ID"),
         extra_prompt=get("EXTRA_PROMPT"),
         language=get("LANGUAGE"),
         trigger_phrase=get("TRIGGER_PHRASE") or "@claude",
@@ -184,8 +186,9 @@ def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> 
     strip_checkout_credentials(cfg.workspace)
 
     bot = gitea.current_user()["login"]
+    markers = publish.Markers(cfg.review_id)
     diff_text = gitea.pull_diff(number)
-    posted = publish.posted_findings(gitea, number, bot)
+    posted = publish.posted_findings(gitea, number, bot, markers)
     still_open = [p for p in posted if p.open]
     log(f"Diff: {len(changed_files(diff_text))} file(s); @{bot} posted {len(posted)} finding(s) before, "
         f"{len(still_open)} still open")
@@ -210,7 +213,7 @@ def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> 
     stats = publish.publish_review(
         gitea, number, head_sha, bot, answer, parse_unified_diff(diff_text),
         publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost),
-        posted, resolve_api, inline=cfg.inline_comments,
+        posted, resolve_api, inline=cfg.inline_comments, markers=markers,
     )
     log(f"Review posted: {stats}")
     return gate(cfg, answer)
@@ -249,7 +252,7 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     thread = [
         f"@{(c.get('user') or {}).get('login', '')}: {(c.get('body') or '')[:1500]}"
         for c in gitea.issue_comments(number)
-        if c.get("id") != comment.get("id") and publish.SUMMARY_MARKER not in (c.get("body") or "")
+        if c.get("id") != comment.get("id") and not publish.ANY_SUMMARY_RE.search(c.get("body") or "")
     ]
     request = body.replace(cfg.trigger_phrase, "", 1).strip() or body
     prompt = prompts.mention_prompt(
@@ -265,8 +268,10 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     text = f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
     gitea.create_comment(number, text)
     if anchored:
-        already = publish.suppressed(publish.posted_findings(gitea, number, bot))
-        publish.post_inline(gitea, number, head_sha, anchored, already, "Claude: {count} inline finding(s) for @" + author + ".")
+        markers = publish.Markers(cfg.review_id)
+        already = publish.suppressed(publish.posted_findings(gitea, number, bot, markers))
+        publish.post_inline(gitea, number, head_sha, anchored, already, "Claude: {count} inline finding(s) for @" + author + ".",
+                            markers)
     return 0
 
 
@@ -301,6 +306,9 @@ def main() -> int:
         return 1
     if "/" not in cfg.repository or not cfg.server_url:
         annotate("error", "Could not determine the repository or server URL from the environment.")
+        return 1
+    if cfg.review_id and not publish.REVIEW_ID_RE.match(cfg.review_id):
+        annotate("error", f"review_id {cfg.review_id!r} is invalid: use 1-32 lowercase letters, digits, - or _.")
         return 1
     owner, repo = cfg.repository.split("/", 1)
     gitea = Gitea(cfg.server_url, cfg.gitea_token, owner, repo)

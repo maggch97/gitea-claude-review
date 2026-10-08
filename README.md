@@ -58,6 +58,7 @@ mirror this repository to your Gitea instance and point `uses:` at the mirror.
 | `claude_code_version` | `stable` | Version passed to the official installer; pin it (e.g. `2.1.284`) for reproducible runs. |
 | `claude_code_executable` | — | Use an existing binary instead of installing. |
 | `rules_file` | `.gitea/claude/REVIEW.md` | Review rules read from the checkout; built-in generic rules when missing. |
+| `review_id` | — | Namespace for this review's comment markers. Give each workflow its own id to run several independent reviews on one pull request with one bot account (see below). |
 | `extra_prompt` | — | Extra instructions appended to the rules. |
 | `language` | — | Language of the comments, e.g. `Simplified Chinese`. |
 | `trigger_phrase` | `@claude` | Phrase that triggers a reply in comments. |
@@ -84,6 +85,27 @@ Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
 `WebSearch` and sub-agents are denied. It must end its answer with a JSON block
 (`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
 as fixed); a missing block is posted as plain text with a warning.
+
+### Several reviews on one pull request
+
+Two workflows can review the same pull request with different rules, e.g. a
+correctness review that gates merges and a design review that does not. Give the
+second one its own `review_id`: the summary comment, inline findings and fixed
+banners are then tracked separately, and neither review edits or re-checks the
+other's comments. Give it its own `trigger_phrase` too, otherwise both reply to the
+same mention. Without `review_id` the markers are the ones earlier versions used,
+so existing comments stay recognized.
+
+```yaml
+- uses: https://github.com/maggch97/gitea-claude-review@v0
+  with:
+    gitea_token: ${{ secrets.CLAUDE_GITEA_TOKEN }}
+    claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    review_id: design
+    rules_file: .gitea/claude/DESIGN_REVIEW.md
+    trigger_phrase: "@design-review"
+    inline_comments: "false"
+```
 
 ## Security notes
 

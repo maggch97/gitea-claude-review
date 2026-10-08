@@ -62,7 +62,7 @@ class FlowTest(unittest.TestCase):
 
     def test_review_posts_summary_and_inline_findings_once(self):
         self.assertEqual(self.review(), 0)
-        summaries = [c for c in self.gitea.comments if publish.SUMMARY_MARKER in c["body"]]
+        summaries = [c for c in self.gitea.comments if publish.Markers().summary in c["body"]]
         self.assertEqual(len(summaries), 1)
         self.assertIn("One real problem.", summaries[0]["body"])
         self.assertIn("src/app.py:40", summaries[0]["body"])  # outside the diff → summary
@@ -79,7 +79,7 @@ class FlowTest(unittest.TestCase):
         self.gitea.pull["head"]["sha"] = "1234567890abcdef"
         self.answer = ClaudeAnswer(summary="Still one problem.", findings=[Finding("src/app.py", 2, "new", "high", "wrong  DEFAULT", "again")])
         self.assertEqual(self.review(), 0)
-        self.assertEqual(len([c for c in self.gitea.comments if publish.SUMMARY_MARKER in c["body"]]), 1)
+        self.assertEqual(len([c for c in self.gitea.comments if publish.Markers().summary in c["body"]]), 1)
         self.assertIn("Still one problem.", self.gitea.comments[0]["body"])
         self.assertEqual(len(self.gitea.reviews), 1)
         posted_id = self.gitea.reviews[0]["comments"][0]["id"]
@@ -134,6 +134,38 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(len(self.gitea.reviews), 1)  # accepted by a person: not posted again
         self.assertFalse(any(m == "PATCH" and "/issues/comments/" in p and p.endswith(str(comment["id"]))
                              for m, p, _ in self.gitea.calls))
+
+    def test_reviews_with_different_ids_share_a_pull_request_without_touching_each_other(self):
+        self.gitea.version = "1.26.0"
+        self.review()  # the default review posts its summary and the "Wrong default" finding
+        default_finding = self.gitea.reviews[0]["comments"][0]
+        design_answer = ClaudeAnswer(summary="Wrong layer.", findings=[Finding("src/app.py", 3, "new", "medium", "Belongs elsewhere", "move it")])
+        self.answer = design_answer
+        self.assertEqual(self.review(review_id="design"), 0)
+        summaries = sorted(c["body"].splitlines()[0] for c in self.gitea.comments)
+        self.assertEqual(summaries, ["<!-- gitea-claude-review:design:summary -->", "<!-- gitea-claude-review:summary -->"])
+        self.assertEqual(len(self.gitea.reviews), 2)
+        design_finding = self.gitea.reviews[1]["comments"][0]
+        self.assertIn("<!-- gitea-claude-review:design:finding:", design_finding["body"])
+        # The design review was not told about the default review's open finding.
+        self.assertNotIn(f"id {default_finding['id']}", self.prompts[1])
+
+        # Each review edits only its own summary, and may only close out its own findings.
+        self.gitea.pull["head"]["sha"] = "1234567890abcdef"
+        self.answer = ClaudeAnswer(summary="Design ok now.", resolved=[Resolution(default_finding["id"], "not mine")])
+        self.assertEqual(self.review(review_id="design"), 0)
+        self.assertEqual(len(self.gitea.comments), 2)
+        self.assertIn("Design ok now.", [c["body"] for c in self.gitea.comments if "design:summary" in c["body"]][0])
+        self.assertIn("One real problem.", [c["body"] for c in self.gitea.comments if "design:summary" not in c["body"]][0])
+        self.assertNotIn("Fixed in", default_finding["body"])
+        self.assertIn(f"id {design_finding['id']}", self.prompts[2])
+        self.assertNotIn(f"id {default_finding['id']}", self.prompts[2])
+
+        self.answer = ClaudeAnswer(summary="Still one problem.")
+        self.assertEqual(self.review(), 0)
+        self.assertIn(f"id {default_finding['id']}", self.prompts[3])
+        self.assertNotIn(f"id {design_finding['id']}", self.prompts[3])
+        self.assertEqual(len(self.gitea.comments), 2)
 
     def test_repository_rules_file_is_used(self):
         rules = Path(self.workspace) / ".gitea" / "claude"
@@ -205,12 +237,19 @@ class FlowTest(unittest.TestCase):
         reply = self.gitea.comments[-1]["body"]
         self.assertTrue(reply.startswith("> @claude why is y 3?"))
         self.assertIn("@alice Because x is read twice.", reply)
-        self.assertNotIn(publish.SUMMARY_MARKER, reply)
+        self.assertNotIn(publish.Markers().summary, reply)
 
     def test_mentions_without_trigger_or_from_the_bot_are_ignored(self):
         self.assertEqual(self.mention("alice", "no trigger here"), 0)
         self.assertEqual(self.mention("review-bot", "@claude loop?"), 0)
         self.assertEqual(self.prompts, [])
+
+    def test_invalid_review_id_fails_before_anything_runs(self):
+        bad = config(self.workspace, "pull_request", {"pull_request": {"number": 7}}, review_id="Design Review")
+        with mock.patch.object(main, "load_config", return_value=bad), mock.patch.object(main, "Gitea", return_value=self.gitea.client()):
+            self.assertEqual(main.main(), 1)
+        self.assertEqual(self.prompts, [])
+        self.assertEqual(self.gitea.comments, [])
 
     def test_errors_become_warnings_unless_fail_on_error(self):
         broken = config(self.workspace, "pull_request", {"pull_request": {"number": 404}})
