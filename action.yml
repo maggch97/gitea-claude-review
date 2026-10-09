@@ -1,13 +1,17 @@
-name: Gitea Claude Review
-description: Claude Code pull request review and @mention replies for Gitea Actions — summary comment, inline findings, no third-party action.
+name: Gitea Claude and Codex Review
+description: Claude Code or Codex pull request review and @mention replies for Gitea Actions — summary comment, inline findings, no third-party action.
 author: maggch97
 branding:
   icon: eye
   color: green
 
 inputs:
+  provider:
+    description: Review backend (claude / codex). Existing workflows default to Claude.
+    required: false
+    default: claude
   gitea_token:
-    description: Token of the bot account that posts comments (needs repository read + issue / pull request write). Never passed to Claude.
+    description: Token of the bot account that posts comments (needs repository read + issue / pull request write). Never passed to the model.
     required: true
   claude_code_oauth_token:
     description: Claude subscription token from `claude setup-token`. Provide this or anthropic_api_key.
@@ -22,7 +26,7 @@ inputs:
     required: false
     default: ""
   model:
-    description: Model id or alias passed to Claude Code (empty = Claude Code default).
+    description: Model id or alias passed to the selected CLI (empty = its default).
     required: false
     default: ""
   claude_code_version:
@@ -31,6 +35,50 @@ inputs:
     default: stable
   claude_code_executable:
     description: Use an existing Claude Code binary instead of installing one.
+    required: false
+    default: ""
+  codex_version:
+    description: Version of @openai/codex to install. Node.js and npm must be available on the Linux runner.
+    required: false
+    default: "0.162.0"
+  codex_executable:
+    description: Use an existing Codex binary instead of installing one (must support --ignore-user-config and --ignore-rules).
+    required: false
+    default: ""
+  codex_effort:
+    description: Optional Codex reasoning effort (minimal / low / medium / high / xhigh); model must support it.
+    required: false
+    default: ""
+  codex_auth_mode:
+    description: Codex authentication (chatgpt / api-key / access-token). No automatic switch to paid API usage.
+    required: false
+    default: chatgpt
+  codex_home:
+    description: For directory storage only, absolute persistent credential directory outside the checkout. Mount it between container jobs.
+    required: false
+    default: ""
+  codex_auth_json:
+    description: Current ChatGPT auth.json Secret; refreshed credentials are written back. For directory storage, used only to bootstrap a missing file.
+    required: false
+    default: ""
+  codex_auth_storage:
+    description: ChatGPT credential storage (gitea-secret / directory). Secret storage requires account-wide serialized jobs before Secret injection.
+    required: false
+    default: gitea-secret
+  codex_secret_name:
+    description: Repository Actions Secret updated after ChatGPT credentials refresh. Must match the secret passed to codex_auth_json.
+    required: false
+    default: CODEX_AUTH_JSON
+  codex_secrets_token:
+    description: Dedicated Gitea token with repository Secret management permission, required for gitea-secret storage. Never passed to the model.
+    required: false
+    default: ""
+  openai_api_key:
+    description: OpenAI Platform API key, only for codex_auth_mode api-key (billed separately from subscriptions).
+    required: false
+    default: ""
+  codex_access_token:
+    description: Business / Enterprise Codex access token, only for codex_auth_mode access-token.
     required: false
     default: ""
   rules_file:
@@ -54,11 +102,11 @@ inputs:
     required: false
     default: write
   max_turns:
-    description: Maximum agent turns per run.
+    description: Maximum Claude agent turns per run (Codex uses timeout_minutes, no turn cap).
     required: false
     default: "30"
   timeout_minutes:
-    description: Timeout of the Claude run in minutes.
+    description: Timeout of the model run in minutes (includes waiting for the Codex account auth lock).
     required: false
     default: "30"
   allowed_bash:
@@ -78,7 +126,7 @@ inputs:
     required: false
     default: none
   fail_on_error:
-    description: Fail the job when the review itself errors (default false — a warning is emitted instead).
+    description: Fail on Claude review errors (default false, warning). Codex errors always fail the job.
     required: false
     default: "false"
   show_cost:
@@ -95,6 +143,7 @@ runs:
   steps:
     - name: Install Claude Code
       id: claude
+      if: inputs.provider == 'claude'
       shell: bash
       env:
         CLAUDE_VERSION: ${{ inputs.claude_code_version }}
@@ -111,7 +160,30 @@ runs:
         "$bin" --version
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
 
-    - name: Review with Claude
+    - name: Install Codex
+      id: codex
+      if: inputs.provider == 'codex'
+      shell: bash
+      env:
+        CODEX_VERSION: ${{ inputs.codex_version }}
+        CODEX_EXECUTABLE: ${{ inputs.codex_executable }}
+      run: |
+        set -euo pipefail
+        if [ "$(uname -s)" != Linux ]; then
+          echo "::error::The Codex backend requires a Linux runner."
+          exit 1
+        fi
+        if [ -n "$CODEX_EXECUTABLE" ]; then
+          bin="$CODEX_EXECUTABLE"
+        else
+          prefix="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gcr-codex-cli.XXXXXX")"
+          npm install --prefix "$prefix" --no-audit --no-fund --ignore-scripts "@openai/codex@$CODEX_VERSION"
+          bin="$prefix/node_modules/.bin/codex"
+        fi
+        "$bin" --version
+        echo "bin=$bin" >> "$GITHUB_OUTPUT"
+
+    - name: Review with selected backend
       shell: bash
       env:
         PYTHONPATH: ${{ github.action_path }}/src
@@ -119,6 +191,17 @@ runs:
         GCR_GITEA_TOKEN: ${{ inputs.gitea_token }}
         GCR_SERVER_URL: ${{ inputs.server_url }}
         GCR_CLAUDE_BIN: ${{ steps.claude.outputs.bin }}
+        GCR_PROVIDER: ${{ inputs.provider }}
+        GCR_CODEX_BIN: ${{ steps.codex.outputs.bin }}
+        GCR_CODEX_EFFORT: ${{ inputs.codex_effort }}
+        GCR_CODEX_AUTH_MODE: ${{ inputs.codex_auth_mode }}
+        GCR_CODEX_HOME: ${{ inputs.codex_home }}
+        GCR_CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}
+        GCR_CODEX_AUTH_STORAGE: ${{ inputs.codex_auth_storage }}
+        GCR_CODEX_SECRET_NAME: ${{ inputs.codex_secret_name }}
+        GCR_CODEX_SECRETS_TOKEN: ${{ inputs.codex_secrets_token }}
+        GCR_OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        GCR_CODEX_ACCESS_TOKEN: ${{ inputs.codex_access_token }}
         GCR_MODEL: ${{ inputs.model }}
         GCR_RULES_FILE: ${{ inputs.rules_file }}
         GCR_EXTRA_PROMPT: ${{ inputs.extra_prompt }}

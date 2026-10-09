@@ -20,3 +20,32 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
+
+  codex-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Codex without lifecycle scripts
+        run: npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund --ignore-scripts @openai/codex@0.162.0
+      - name: Check review CLI options without model usage
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import os, subprocess, tempfile
+          from pathlib import Path
+          from gitea_claude_review.codex import build_command
+          binary = str(Path(os.environ['RUNNER_TEMP']) / 'codex/node_modules/.bin/codex')
+          subprocess.run([binary, '--version'], check=True)
+          with tempfile.TemporaryDirectory() as folder:
+              path = Path(folder)
+              command = build_command(binary, '', 'high', path / 'schema.json', path / 'result.json')
+              # --help parses the real command without reading account auth or calling a model.
+              subprocess.run(command + ['--help'], check=True, timeout=30)
+          PY
