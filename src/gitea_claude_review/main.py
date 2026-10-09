@@ -43,7 +43,8 @@ class Config:
     inline_comments: bool = True
     wip_policy: str = "skip"
     fail_on: str = "none"
-    fail_on_error: bool = False
+    # Kept for existing callers; execution failures always fail the job.
+    fail_on_error: bool = True
     show_cost: bool = False
     provider: str = "claude"
     codex_bin: str = "codex"
@@ -104,7 +105,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         inline_comments=_bool(get("INLINE_COMMENTS"), True),
         wip_policy=(get("WIP_POLICY") or "skip").lower(),
         fail_on=(get("FAIL_ON") or "none").lower(),
-        fail_on_error=_bool(get("FAIL_ON_ERROR"), False),
+        fail_on_error=_bool(get("FAIL_ON_ERROR"), True),
         show_cost=_bool(get("SHOW_COST"), False),
         provider=(get("PROVIDER") or "claude").lower(),
         codex_bin=get("CODEX_BIN") or "codex",
@@ -183,7 +184,8 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
     started = time.monotonic()
     if cfg.provider == "codex":
         mode = "YOLO" if cfg.codex_yolo else "read-only"
-        log(f"Running Codex ({cfg.model or 'default model'}, auth: {cfg.codex_auth_mode}, mode: {mode})")
+        log(f"Running Codex ({cfg.model or 'default model'}, effort: {cfg.codex_effort or 'default'}, "
+            f"auth: {cfg.codex_auth_mode}, mode: {mode})")
         # Codex enforces JSON Schema directly; sentinel lines are Claude's contract.
         prompt = prompt.replace(prompts.OUTPUT_CONTRACT, prompts.CODEX_OUTPUT_CONTRACT)
         persist_auth = None
@@ -388,10 +390,10 @@ def main() -> int:
                 raise ValueError("Codex ChatGPT account auth requires a private repository and trusted runner")
         return dispatch(cfg, gitea)
     except Exception as error:  # noqa: BLE001 - surface every failure as one annotation
-        # Keep the published Claude option; new Codex failures always fail the job.
-        failed = cfg.fail_on_error or cfg.provider != "claude"
-        annotate("error" if failed else "warning", f"{cfg.reviewer} review failed: {error}")
-        return 1 if failed else 0
+        # An incomplete review cannot be a successful check, even with the legacy
+        # fail_on_error=false input. Finding severity is controlled by fail_on.
+        annotate("error", f"{cfg.reviewer} review failed: {error}")
+        return 1
 
 
 if __name__ == "__main__":

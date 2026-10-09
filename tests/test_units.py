@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -172,6 +173,13 @@ class RetryTest(unittest.TestCase):
 
 
 class SubprocessTest(unittest.TestCase):
+    def test_nonzero_claude_exit_never_publishes_stdout_as_a_review(self):
+        for stdout in ("Partial review text", '{"is_error": false, "result": "Looks fine"}'):
+            process = subprocess.CompletedProcess(["claude"], 1, stdout, "")
+            with self.subTest(stdout=stdout), mock.patch.object(claude.subprocess, "run", return_value=process):
+                with self.assertRaisesRegex(RuntimeError, "Claude Code exited with 1"):
+                    claude.run_claude("review", ["claude"], ".", 30)
+
     def test_claude_runs_without_the_gitea_token_and_envelope_is_read(self):
         # A stand-in for Claude Code: reports the prompt length and any leaked Gitea variables.
         script = textwrap.dedent("""\

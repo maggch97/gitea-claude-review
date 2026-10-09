@@ -100,7 +100,9 @@ Action 会检查仓库是否私有。Action 源码可继续在公开 GitHub 仓�
 | 工作空间 token | `codex_auth_mode: access-token` + `codex_access_token` | Business / Enterprise 的 Codex 访问令牌 |
 
 Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号。进程失败、超时、缺少结果或非法 JSON
-都会让任务失败，不受旧的 `fail_on_error: false` 影响，也不会发布不完整结果。
+都会让任务失败，也不会发布不完整结果。Claude 运行错误也一律失败，包括 OAuth token 被撤销、
+HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error` 已弃用，仅保留输入兼容，
+即使显式填写 `false` 也不能把未完成的审查标为成功。审查发现的问题级别仍由 `fail_on` 控制。
 `max_turns`、`allowed_bash` 只对 Claude 生效；Codex 用超时限制，不伪造金额或 Claude 轮数。
 设置 `codex_yolo: true` 后使用 `--dangerously-bypass-approvals-and-sandbox`，关闭沙盒和审批；
 此时只做审查由提示词约束，不再由文件系统或网络隔离保证。默认值为 `false`，非法值直接报错。
