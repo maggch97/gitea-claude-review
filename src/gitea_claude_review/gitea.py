@@ -98,6 +98,22 @@ class Gitea:
     def current_user(self) -> dict[str, Any]:
         return self._request("GET", "/user")
 
+    def repository_info(self) -> dict[str, Any]:
+        return self._request("GET", self._repo)
+
+    def check_secret_access(self, name: str) -> None:
+        """Check ownership/secret permissions before allowing an OAuth rotation."""
+        secrets = self._paged(f"{self._repo}/actions/secrets")
+        if not any(secret.get("name") == name for secret in secrets):
+            raise ValueError(f"Repository Secret {name} is missing; configure it before enabling Codex")
+
+    def update_secret(self, name: str, value: str) -> None:
+        """Gitea encrypts Secret data server-side; never echo a failed response body."""
+        try:
+            self._request("PUT", f"{self._repo}/actions/secrets/{urllib.parse.quote(name, safe='')}", {"data": value})
+        except GiteaError as error:
+            raise RuntimeError(f"Codex Secret write-back failed (HTTP {error.status}); stop jobs and reseed account auth") from None
+
     def version(self) -> str:
         return (self._request("GET", "/version") or {}).get("version", "")
 
