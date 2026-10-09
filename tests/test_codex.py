@@ -39,7 +39,7 @@ class CodexContractTest(unittest.TestCase):
             value = copy.deepcopy(RESULT)
             value["findings"][0]["path"] = path
             invalid.append(json.dumps(value))
-        for field, bad in (("line", True), ("line", 0), ("severity", "urgent"), ("body", " ")):
+        for field, bad in (("line", True), ("line", -1), ("severity", "urgent"), ("body", " ")):
             value = copy.deepcopy(RESULT)
             value["findings"][0][field] = bad
             invalid.append(json.dumps(value))
@@ -52,6 +52,21 @@ class CodexContractTest(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 codex.parse_answer(value)
+
+    def test_file_level_design_findings_block_without_fabricated_line_numbers(self):
+        result = copy.deepcopy(RESULT)
+        result["findings"][0]["line"] = 0
+        result["resolved"] = []
+        answer = codex.parse_answer(json.dumps(result))
+        cfg = config("checkout", "pull_request", {}, provider="codex", fail_on="high")
+        self.assertEqual(main.gate(cfg, answer), 1)
+        anchored, loose = test_flows.publish.split_anchorable(answer.findings, {})
+        self.assertEqual(anchored, [])
+        text = test_flows.publish.loose_section(loose)
+        self.assertIn("`src/app.py`", text)
+        self.assertNotIn("src/app.py:0", text)
+        self.assertEqual(main.gate(cfg, codex.parse_answer(json.dumps({
+            "summary": "Design approved.", "findings": [], "resolved": []}))), 0)
 
     def test_auth_never_fabricates_missing_tokens(self):
         for value in ({}, {"auth_mode": "api-key"}, {"auth_mode": "chatgpt", "tokens": {}}, []):

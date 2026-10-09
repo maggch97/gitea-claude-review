@@ -52,8 +52,11 @@ CODEX_OUTPUT_CONTRACT = """\
 Return only the JSON object required by the output schema, without Markdown fences
 or sentinel lines. The summary is Markdown for people; findings become inline
 comments. Every finding must point to code verified in this checkout, with a
-repository-relative path, a positive line number, side new/old, severity
-blocker/high/medium/low, title and body. Use empty findings when nothing is found.
+repository-relative path, side new/old, severity blocker/high/medium/low, title
+and body. Use a positive line number for a code location, or line 0 explicitly for
+a file-level design finding with no single responsible line. Line 0 findings stay
+in the summary and never become inline comments; do not invent a code location.
+Use empty findings when nothing is found.
 The resolved array contains only ids of earlier findings verified fixed in the
 current code and a non-empty explanation; otherwise return an empty array.
 """

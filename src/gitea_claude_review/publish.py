@@ -92,8 +92,11 @@ def finding_text(f: Finding) -> str:
 def loose_section(loose: list[Finding]) -> str:
     if not loose:
         return ""
+    # Line zero explicitly identifies a file-level design issue, not a fabricated code location.
     rows = "\n".join(
-        f"- {_SEVERITY_ICON.get(f.severity, '•')} **[{f.severity}]** `{f.path}:{f.line}` — {f.title}\n  {f.body}" for f in loose
+        f"- {_SEVERITY_ICON.get(f.severity, '•')} **[{f.severity}]** "
+        f"`{f.path}{':' + str(f.line) if f.line > 0 else ''}` — {f.title}\n  {f.body}"
+        for f in loose
     )
     return "\n\n#### Findings outside the diff\n" + rows
 

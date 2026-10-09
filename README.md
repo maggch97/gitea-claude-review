@@ -220,7 +220,10 @@ from earlier versions, including when switching from Claude to Codex.
 When sharing a ChatGPT login on Gitea, put the review jobs in one workflow with
 workflow-level concurrency and chain them using `needs`. Separate workflows in
 the same concurrency group can replace each other's pending reviews. Keep the
-correctness job as the required check; a later design job can remain advisory.
+correctness and design jobs as separate required checks when both must pass.
+Design blockers can use `fail_on: high` and `inline_comments: false`; a finding
+with `line: 0` explicitly identifies a file-level issue and is posted in the
+summary without a fabricated code location.
 
 Use the same pinned Action and auth inputs for both jobs, and add these inputs to
 the design step:
