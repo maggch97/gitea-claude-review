@@ -76,7 +76,7 @@ GitHub; account credentials belong only on your trusted private runner.
    existing summary comments and findings.
 
 ```yaml
-- uses: https://github.com/maggch97/gitea-claude-review@c74ebc676ad430824cd534a99957bd934f26b158
+- uses: https://github.com/maggch97/gitea-claude-review@c6f939b0a55bf22ca7194d690fb4a862f3f418ff
   with:
     provider: codex
     gitea_token: ${{ secrets.CLAUDE_GITEA_TOKEN }}
