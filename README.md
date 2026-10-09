@@ -145,8 +145,10 @@ Neither mode reuses ambient runner credentials.
 
 Codex enforces a JSON Schema with `summary`, `findings[]` and `resolved[]`; the
 action validates fields, enum values, line numbers and paths again. Missing or
-invalid results and nonzero CLI exits **always fail the job**, even when the
-legacy Claude `fail_on_error` option is false. No incomplete/plain-text Codex
+invalid results and nonzero CLI exits **always fail the job**. Claude execution
+errors also always fail, even when the deprecated `fail_on_error` input is false.
+Authentication errors (including revoked OAuth tokens / HTTP 401), timeouts and
+Gitea API errors are failed checks, not warnings. No incomplete/plain-text Codex
 answer is published. Codex does not report monetary cost or a Claude-style turn
 count, so those fields are omitted. `max_turns` and `allowed_bash` apply only to
 Claude; Codex uses `timeout_minutes`. Set `codex_yolo: true` to pass
@@ -193,7 +195,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `inline_comments` | `true` | Post anchored findings as inline review comments. |
 | `wip_policy` | `skip` | Draft or `WIP:` pull requests: `skip` or `fail`. |
 | `fail_on` | `none` | Fail the job when a finding reaches `low` / `medium` / `high` / `blocker`. |
-| `fail_on_error` | `false` | Claude errors: fail or warn. Codex errors always fail. |
+| `fail_on_error` | `true` | Deprecated compatibility input; execution errors always fail for both backends, even when `false`. |
 | `show_cost` | `false` | Show cost and turns in the comment footer. |
 | `server_url` | the workflow's server | Gitea base URL. |
 
@@ -254,7 +256,7 @@ with:
 - Comment triggers require `mention_permission` (default `write`), so strangers
   cannot spend your model quota.
 - Gitea may not pass secrets to workflows triggered from forks; reviews of fork
-  pull requests then fail (Claude can warn according to `fail_on_error`).
+  pull requests then fail.
 
 ## Development
 

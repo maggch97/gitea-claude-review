@@ -134,9 +134,9 @@ inputs:
     required: false
     default: none
   fail_on_error:
-    description: Fail on Claude review errors (default false, warning). Codex errors always fail the job.
+    description: Deprecated compatibility input. Claude and Codex execution errors always fail the job, including when false.
     required: false
-    default: "false"
+    default: "true"
   show_cost:
     description: Show cost and turns in the comment footer.
     required: false

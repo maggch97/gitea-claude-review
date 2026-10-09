@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -269,12 +270,53 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.prompts, [])
         self.assertEqual(self.gitea.comments, [])
 
-    def test_errors_become_warnings_unless_fail_on_error(self):
-        broken = config(self.workspace, "pull_request", {"pull_request": {"number": 404}})
-        with mock.patch.object(main, "load_config", return_value=broken), mock.patch.object(main, "Gitea", return_value=self.gitea.client()):
-            self.assertEqual(main.main(), 0)
-            broken.fail_on_error = True
-            self.assertEqual(main.main(), 1)
+    def test_api_errors_always_fail_for_both_backends(self):
+        for provider in ("claude", "codex"):
+            for legacy_setting in (False, True):
+                broken = config(self.workspace, "pull_request", {"pull_request": {"number": 404}},
+                                provider=provider, codex_auth_mode="api-key", fail_on_error=legacy_setting)
+                with self.subTest(provider=provider, fail_on_error=legacy_setting), \
+                        mock.patch.object(main, "load_config", return_value=broken), \
+                        mock.patch.object(main, "Gitea", return_value=self.gitea.client()), \
+                        mock.patch.object(main, "annotate") as annotate:
+                    self.assertEqual(main.main(), 1)
+                    self.assertEqual(annotate.call_args.args[0], "error")
+
+
+class AuthenticationFailureTest(unittest.TestCase):
+    def test_revoked_oauth_token_fails_reviews_and_mentions_without_publishing(self):
+        # Claude can report is_error in a JSON envelope even with exit code 0.
+        # Exercise the real parser and event dispatch, not only an injected exception.
+        error = "Failed to authenticate. API Error: 401 OAuth access token has been revoked."
+        process = subprocess.CompletedProcess(["claude"], 0,
+                                              json.dumps({"is_error": True, "result": error}), "")
+        events = {
+            "pull_request": {"pull_request": {"number": 7}},
+            "issue_comment": {"comment": {"id": 10, "user": {"login": "alice"}, "body": "@claude review"},
+                              "issue": {"number": 7, "pull_request": {}}},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            for event_name, event in events.items():
+                for legacy_setting in (False, True):
+                    server = FakeGitea()
+                    old_summary = {"id": 20, "body": publish.Markers().summary + "Previous review",
+                                   "user": {"login": server.bot}}
+                    server.comments.append(old_summary.copy())
+                    cfg = config(workspace, event_name, event, fail_on_error=legacy_setting)
+                    with self.subTest(event=event_name, fail_on_error=legacy_setting), \
+                            mock.patch.object(main, "load_config", return_value=cfg), \
+                            mock.patch.object(main, "Gitea", return_value=server.client()), \
+                            mock.patch.object(main, "checkout_pull_head"), \
+                            mock.patch.object(main, "strip_checkout_credentials"), \
+                            mock.patch.object(main.claude.subprocess, "run", return_value=process), \
+                            mock.patch.object(main, "annotate") as annotate:
+                        self.assertEqual(main.main(), 1)
+                        kind, message = annotate.call_args.args
+                        self.assertEqual(kind, "error")
+                        self.assertIn(error, message)
+                    self.assertEqual(server.comments, [old_summary])
+                    self.assertEqual(server.reviews, [])
+                    self.assertFalse(any(method in ("POST", "PATCH") for method, _, _ in server.calls))
 
 
 class CredentialTest(unittest.TestCase):

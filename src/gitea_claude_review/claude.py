@@ -131,8 +131,11 @@ def run_claude(prompt: str, cmd: list[str], cwd: str, timeout_s: int) -> ClaudeA
     proc = subprocess.run(
         cmd, input=prompt, text=True, capture_output=True, cwd=cwd, env=claude_env(), timeout=timeout_s
     )
-    if proc.returncode != 0 and not proc.stdout.strip():
-        raise RuntimeError(f"Claude Code exited with {proc.returncode}: {proc.stderr.strip()[-1500:]}")
+    if proc.returncode != 0:
+        # Failed processes can still print text or a JSON envelope. Neither is a
+        # completed review; use stdout only when stderr has no diagnostic.
+        detail = proc.stderr.strip() or proc.stdout.strip()
+        raise RuntimeError(f"Claude Code exited with {proc.returncode}: {detail[-1500:]}")
     try:
         envelope = json.loads(proc.stdout)
     except json.JSONDecodeError:
