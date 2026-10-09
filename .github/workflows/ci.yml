@@ -45,7 +45,8 @@ jobs:
           subprocess.run([binary, '--version'], check=True)
           with tempfile.TemporaryDirectory() as folder:
               path = Path(folder)
-              command = build_command(binary, '', 'high', path / 'schema.json', path / 'result.json')
-              # --help parses the real command without reading account auth or calling a model.
-              subprocess.run(command + ['--help'], check=True, timeout=30)
+              for yolo in (False, True):
+                  command = build_command(binary, '', 'high', path / 'schema.json', path / 'result.json', yolo=yolo)
+                  # --help parses both modes without reading account auth or calling a model.
+                  subprocess.run(command + ['--help'], check=True, timeout=30)
           PY

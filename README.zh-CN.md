@@ -13,7 +13,7 @@
   （需 Gitea 1.26+，这是第一个有解决对话 API 的版本；更早的版本只加标记）。被人手动解决的评论不动、也不再重发。
 - **在任意 issue 或 PR 评论里 `@claude`**，可以提问或要求重新审查。
 - **不依赖第三方审查 action**：一个组合 action，安装所选 CLI 后运行只用标准库的 Python。
-- **Gitea 令牌不交给模型**：Claude 用只读工具，Codex 用只读 sandbox，由本 action 负责发评论。
+- **Gitea 令牌不交给模型**：Claude 用只读工具，Codex 默认用只读 sandbox，也可显式开启 YOLO，由本 action 负责发评论。
 
 按 Gitea 的 API 设计（行号锚点、`/pulls/{n}.diff`、没有 GraphQL），不是从只支持 GitHub 的 action 移植过来的。
 
@@ -101,7 +101,9 @@ Action 会检查仓库是否私有。Action 源码可继续在公开 GitHub 仓�
 
 Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号。进程失败、超时、缺少结果或非法 JSON
 都会让任务失败，不受旧的 `fail_on_error: false` 影响，也不会发布不完整结果。
-`max_turns`、`allowed_bash` 只对 Claude 生效；Codex 使用只读 sandbox 和超时限制，不伪造金额或 Claude 轮数。
+`max_turns`、`allowed_bash` 只对 Claude 生效；Codex 用超时限制，不伪造金额或 Claude 轮数。
+设置 `codex_yolo: true` 后使用 `--dangerously-bypass-approvals-and-sandbox`，关闭沙盒和审批；
+此时只做审查由提示词约束，不再由文件系统或网络隔离保证。默认值为 `false`，非法值直接报错。
 
 切换为 `@codex` 时还要同步修改 workflow 的评论事件 `if` 条件。总评论原地更新、行级去重、已修复问题收尾、
 权限检查和过时审查丢弃继续复用已有逻辑。

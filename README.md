@@ -17,7 +17,7 @@ Existing workflows continue to use Claude; select `provider: codex` to switch.
 - **No third-party action and no dependencies**: a composite action that installs
   selected CLI and runs a small standard-library Python module.
 - **The Gitea token is excluded from the model process environment.** Claude uses
-  read-only tools; Codex uses a read-only sandbox without approvals or web search.
+  read-only tools; Codex defaults to a read-only sandbox, with an explicit YOLO option.
   This action posts the results, not the model.
 
 It is written for Gitea's API (line-number anchors, `/pulls/{n}.diff`, no
@@ -149,7 +149,10 @@ invalid results and nonzero CLI exits **always fail the job**, even when the
 legacy Claude `fail_on_error` option is false. No incomplete/plain-text Codex
 answer is published. Codex does not report monetary cost or a Claude-style turn
 count, so those fields are omitted. `max_turns` and `allowed_bash` apply only to
-Claude; Codex uses the read-only OS sandbox and `timeout_minutes`.
+Claude; Codex uses `timeout_minutes`. Set `codex_yolo: true` to pass
+`--dangerously-bypass-approvals-and-sandbox`, which disables sandboxing and
+approval prompts. Without it, Codex uses a read-only sandbox. In YOLO mode,
+review-only behavior is a prompt instruction, not a filesystem/network boundary.
 
 Changing `trigger_phrase` requires changing the workflow's comment-event `if`
 condition too. Bot self-replies, permission checks, summary updates, inline
@@ -168,6 +171,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `claude_code_executable` | — | Use an existing binary instead of installing. |
 | `codex_version` | `0.162.0` | Pinned npm CLI version; needs Node.js/npm on Linux. |
 | `codex_executable` | — | Existing CLI, supporting `--ignore-user-config` / `--ignore-rules`. |
+| `codex_yolo` | `false` | Run without sandboxing or approval prompts. Values must be `true` / `false`. |
 | `codex_effort` | model default | `minimal`, `low`, `medium`, `high`, `xhigh` (model must support it). |
 | `codex_auth_mode` | `chatgpt` | `chatgpt`, `api-key` or `access-token`; never auto-switches. |
 | `codex_home` | — | Directory storage only: persistent absolute path outside checkout. |

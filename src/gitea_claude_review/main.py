@@ -47,6 +47,7 @@ class Config:
     provider: str = "claude"
     codex_bin: str = "codex"
     codex_effort: str = ""
+    codex_yolo: bool = False
     codex_auth_mode: str = "chatgpt"
     codex_home: str = ""
     codex_auth_json: str = ""
@@ -65,6 +66,14 @@ def _bool(value: str, default: bool) -> bool:
     if value == "":
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _codex_yolo(value: str) -> bool:
+    # Permission settings must reject typos instead of silently selecting a mode.
+    normalized = value.strip().lower()
+    if normalized not in ("", "true", "false"):
+        raise ValueError("codex_yolo must be true or false")
+    return normalized == "true"
 
 
 def load_config(env: dict[str, str] | None = None) -> Config:
@@ -98,6 +107,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         provider=(get("PROVIDER") or "claude").lower(),
         codex_bin=get("CODEX_BIN") or "codex",
         codex_effort=get("CODEX_EFFORT"),
+        codex_yolo=_codex_yolo(get("CODEX_YOLO")),
         codex_auth_mode=get("CODEX_AUTH_MODE") or "chatgpt",
         codex_home=get("CODEX_HOME"),
         codex_auth_json=get("CODEX_AUTH_JSON"),
@@ -170,7 +180,8 @@ def write_diff(cfg: Config, number: int, diff_text: str) -> str:
 def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
     started = time.monotonic()
     if cfg.provider == "codex":
-        log(f"Running Codex ({cfg.model or 'default model'}, auth: {cfg.codex_auth_mode})")
+        mode = "YOLO" if cfg.codex_yolo else "read-only"
+        log(f"Running Codex ({cfg.model or 'default model'}, auth: {cfg.codex_auth_mode}, mode: {mode})")
         # Codex enforces JSON Schema directly; sentinel lines are Claude's contract.
         prompt = prompt.replace(prompts.OUTPUT_CONTRACT, prompts.CODEX_OUTPUT_CONTRACT)
         persist_auth = None
@@ -194,6 +205,7 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
             auth_mode=cfg.codex_auth_mode, account_home=cfg.codex_home, auth_json=cfg.codex_auth_json,
             api_key=cfg.openai_api_key, access_token=cfg.codex_access_token,
             auth_storage=cfg.codex_auth_storage, persist_auth=persist_auth,
+            yolo=cfg.codex_yolo,
         )
     elif cfg.provider == "claude":
         cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)

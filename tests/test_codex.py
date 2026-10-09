@@ -82,6 +82,19 @@ class CodexContractTest(unittest.TestCase):
                 expected[key] = "selected-credential"
             self.assertEqual(env, expected)
 
+    def test_yolo_has_no_sandbox_or_approval_flags_and_rejects_config_typos(self):
+        cmd = codex.build_command("codex", "", "", Path("schema"), Path("out"), yolo=True)
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", cmd)
+        self.assertNotIn("--sandbox", cmd)
+        self.assertNotIn("--ask-for-approval", cmd)
+        cfg = main.load_config({"GCR_PROVIDER": "codex", "GCR_CODEX_YOLO": "true",
+                               "GCR_CODEX_AUTH_MODE": "api-key", "GCR_OPENAI_API_KEY": "key"})
+        with mock.patch.object(codex, "run_codex", return_value=codex.parse_answer(json.dumps(RESULT))) as run:
+            main.run_model(cfg, prompts.OUTPUT_CONTRACT)
+        self.assertIs(run.call_args.kwargs["yolo"], True)
+        with self.assertRaisesRegex(ValueError, "codex_yolo"):
+            main.load_config({"GCR_CODEX_YOLO": "typo"})
+
     def test_config_and_prompt_route_to_codex(self):
         cfg = main.load_config({"GCR_PROVIDER": "codex", "GCR_CODEX_AUTH_MODE": "api-key",
                                 "GCR_OPENAI_API_KEY": "chosen-key", "GCR_CODEX_EFFORT": "high"})
@@ -173,9 +186,9 @@ class CodexProcessTest(unittest.TestCase):
 
     def run_cli(self, mode="ok", result=None, **kwargs):
         original = codex.build_command
-        def command(binary, model, effort, schema, output):
+        def command(binary, model, effort, schema, output, **options):
             return [sys.executable, str(self.script), mode, json.dumps(RESULT if result is None else result)] + original(
-                binary, model, effort, schema, output)[1:]
+                binary, model, effort, schema, output, **options)[1:]
         with mock.patch.object(codex, "build_command", side_effect=command):
             return codex.run_codex("review", sys.executable, "", "", str(self.workspace), kwargs.pop("timeout_s", 10), **kwargs)
 
