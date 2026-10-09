@@ -49,6 +49,10 @@ inputs:
     description: Optional Codex reasoning effort (minimal / low / medium / high / xhigh); model must support it.
     required: false
     default: ""
+  codex_yolo:
+    description: Run Codex without sandboxing or approval prompts (true / false). Enable only on a trusted isolated runner.
+    required: false
+    default: "false"
   codex_auth_mode:
     description: Codex authentication (chatgpt / api-key / access-token). No automatic switch to paid API usage.
     required: false
@@ -194,6 +198,7 @@ runs:
         GCR_PROVIDER: ${{ inputs.provider }}
         GCR_CODEX_BIN: ${{ steps.codex.outputs.bin }}
         GCR_CODEX_EFFORT: ${{ inputs.codex_effort }}
+        GCR_CODEX_YOLO: ${{ inputs.codex_yolo }}
         GCR_CODEX_AUTH_MODE: ${{ inputs.codex_auth_mode }}
         GCR_CODEX_HOME: ${{ inputs.codex_home }}
         GCR_CODEX_AUTH_JSON: ${{ inputs.codex_auth_json }}

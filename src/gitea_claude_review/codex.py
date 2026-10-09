@@ -1,4 +1,4 @@
-"""Read-only Codex reviews with explicit auth and durable subscription refresh.
+"""Codex reviews with explicit auth and durable subscription refresh.
 
 Only the CLI talks to OpenAI. The action never implements OAuth refresh itself.
 Account auth is copied into an isolated home, then saved back to a repository
@@ -61,9 +61,11 @@ def codex_env(home: Path, mode: str, credential: str, source: dict | None = None
     return env
 
 
-def build_command(binary: str, model: str, effort: str, schema: Path, output: Path) -> list[str]:
-    cmd = [binary, "--ask-for-approval", "never", "exec", "--sandbox", "read-only",
-           "--ephemeral", "--ignore-user-config", "--ignore-rules", "--json",
+def build_command(binary: str, model: str, effort: str, schema: Path, output: Path, *, yolo: bool = False) -> list[str]:
+    # YOLO bypasses both controls; do not combine it with conflicting sandbox/approval flags.
+    cmd = [binary, "exec", "--dangerously-bypass-approvals-and-sandbox"] if yolo else [
+        binary, "--ask-for-approval", "never", "exec", "--sandbox", "read-only"]
+    cmd += ["--ephemeral", "--ignore-user-config", "--ignore-rules", "--json",
            "--output-schema", str(schema), "--output-last-message", str(output),
            "-c", 'cli_auth_credentials_store="file"', "-c", 'web_search="disabled"',
            "-c", "features.multi_agent=false",
@@ -202,7 +204,7 @@ def _execute(cmd: list[str], prompt: str, cwd: str, env: dict, timeout_s: float)
 def run_codex(prompt: str, binary: str, model: str, effort: str, cwd: str, timeout_s: int,
               *, auth_mode: str, account_home: str = "", auth_json: str = "",
               api_key: str = "", access_token: str = "", auth_storage: str = "gitea-secret",
-              persist_auth: Callable[[str], None] | None = None) -> ClaudeAnswer:
+              persist_auth: Callable[[str], None] | None = None, yolo: bool = False) -> ClaudeAnswer:
     if auth_mode not in ("chatgpt", "api-key", "access-token"):
         raise ValueError("codex_auth_mode must be chatgpt, api-key or access-token")
     if timeout_s <= 0:
@@ -232,7 +234,7 @@ def run_codex(prompt: str, binary: str, model: str, effort: str, cwd: str, timeo
         run_home = Path(folder)
         schema, output = run_home / "review-schema.json", run_home / "review-result.json"
         schema.write_text(json.dumps(REVIEW_SCHEMA), encoding="utf-8")
-        cmd = build_command(binary, model, effort, schema, output)
+        cmd = build_command(binary, model, effort, schema, output, yolo=yolo)
         credential = api_key if auth_mode == "api-key" else access_token
         env = codex_env(run_home, auth_mode, credential)
         secrets = [credential] if credential else []
