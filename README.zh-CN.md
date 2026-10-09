@@ -55,7 +55,7 @@ Gitea 可以直接用 URL 引用 action。Runner 访问不了 GitHub 时，把�
 5. 沿用原机器人账号和审查 token，可以继续更新旧的总评论并对行级评论去重。
 
 ```yaml
-- uses: https://github.com/maggch97/gitea-claude-review@<包含Codex支持的commit>
+- uses: https://github.com/maggch97/gitea-claude-review@c74ebc676ad430824cd534a99957bd934f26b158
   with:
     provider: codex
     gitea_token: ${{ secrets.CLAUDE_GITEA_TOKEN }}
