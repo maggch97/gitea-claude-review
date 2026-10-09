@@ -119,9 +119,21 @@ Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号
 | `claude_code_version` | `stable` | 建议固定版本（如 `2.1.284`），结果可复现 |
 | `rules_file` | `.gitea/claude/REVIEW.md` | 仓库里的审查规则文件，不存在时用内置通用规则 |
 | `language` | — | 评论语言，例如 `Simplified Chinese` |
+| `review_id` | — | 评论标记的命名空间。同一个 PR 上要跑多条互不干扰的 review（如正确性 + 设计）时，给每条审查不同的 id，并配不同的 `trigger_phrase` |
 | `mention_permission` | `write` | 评论里 @ 触发所需的最低仓库权限 |
 | `wip_policy` | `skip` | 草稿或 `WIP:` 标题的 PR：跳过或让流水线失败 |
 | `fail_on` | `none` | 有问题达到该级别时让任务失败，可做合并门禁 |
+
+### 同一个 PR 上的独立审查
+
+正确性与设计审查可以共用机器人，用 `review_id: design` 隔离设计总评论、行级问题和修复标记；
+空 id 保持已有评论标记，Claude 切到 Codex 后也能继续更新。触发词分别设置，避免同一条评论启动两种审查。
+
+共用同一份 ChatGPT 登录时，在同一个工作流内设置 workflow 级并发分组，并用 `needs` 串行安排审查 job。
+独立工作流共用并发分组会竞争等待位置，可能取消对方的等待运行。
+两条审查使用同一个固定 Action 版本和相同认证配置，并可分别设为必需检查。
+设计审查可配置 `fail_on: high`、`inline_comments: false`；文件级问题用 `line: 0` 明确表示没有单行位置，
+只发到总评论，不伪造代码行号。
 
 ## 安全设计
 

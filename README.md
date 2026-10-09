@@ -182,6 +182,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `openai_api_key` | — | API-key mode only; separate usage billing. |
 | `codex_access_token` | — | Access-token mode only; Business/Enterprise workspace token. |
 | `rules_file` | `.gitea/claude/REVIEW.md` | Review rules read from the checkout; built-in generic rules when missing. |
+| `review_id` | — | Namespace for this review's comment markers. Give each workflow its own id to run several independent reviews on one pull request with one bot account (see below). |
 | `extra_prompt` | — | Extra instructions appended to the rules. |
 | `language` | — | Language of the comments, e.g. `Simplified Chinese`. |
 | `trigger_phrase` | `@claude` | Phrase that triggers a reply in comments. |
@@ -208,6 +209,32 @@ Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
 `WebSearch` and sub-agents are denied. It must end its answer with a JSON block
 (`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
 as fixed); a missing block is posted as plain text with a warning.
+
+### Several reviews on one pull request
+
+Independent reviews can share one pull request and bot account. Give the design
+review its own `review_id`: summaries, findings and fixed banners are tracked
+separately. Give it its own `trigger_phrase` too. An empty id preserves comments
+from earlier versions, including when switching from Claude to Codex.
+
+When sharing a ChatGPT login on Gitea, put the review jobs in one workflow with
+workflow-level concurrency and chain them using `needs`. Separate workflows in
+the same concurrency group can replace each other's pending reviews. Keep the
+correctness and design jobs as separate required checks when both must pass.
+Design blockers can use `fail_on: high` and `inline_comments: false`; a finding
+with `line: 0` explicitly identifies a file-level issue and is posted in the
+summary without a fabricated code location.
+
+Use the same pinned Action and auth inputs for both jobs, and add these inputs to
+the design step:
+
+```yaml
+with:
+  review_id: design
+  rules_file: .gitea/claude/DESIGN_REVIEW.md
+  trigger_phrase: "@design-review"
+  inline_comments: "false"
+```
 
 ## Security notes
 

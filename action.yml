@@ -89,6 +89,10 @@ inputs:
     description: Repository-relative file with review rules (your REVIEW.md). Missing file = built-in generic rules.
     required: false
     default: .gitea/claude/REVIEW.md
+  review_id:
+    description: Namespace for this review's comment markers. Give each workflow its own id (e.g. design) to run several independent reviews on one pull request with one bot account. Lowercase letters, digits, - and _; empty keeps the original markers.
+    required: false
+    default: ""
   extra_prompt:
     description: Extra instructions appended to the rules.
     required: false
@@ -209,6 +213,7 @@ runs:
         GCR_CODEX_ACCESS_TOKEN: ${{ inputs.codex_access_token }}
         GCR_MODEL: ${{ inputs.model }}
         GCR_RULES_FILE: ${{ inputs.rules_file }}
+        GCR_REVIEW_ID: ${{ inputs.review_id }}
         GCR_EXTRA_PROMPT: ${{ inputs.extra_prompt }}
         GCR_LANGUAGE: ${{ inputs.language }}
         GCR_TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}

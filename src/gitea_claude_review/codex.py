@@ -30,7 +30,7 @@ REVIEW_SCHEMA = _object({
     "summary": {"type": "string", "minLength": 1},
     "findings": {"type": "array", "items": _object({
         "path": {"type": "string", "minLength": 1},
-        "line": {"type": "integer", "minimum": 1},
+        "line": {"type": "integer", "minimum": 0},
         "side": {"type": "string", "enum": ["new", "old"]},
         "severity": {"type": "string", "enum": list(SEVERITIES)},
         "title": {"type": "string", "minLength": 1},
@@ -108,7 +108,7 @@ def _validate(value, schema: dict, location: str) -> None:
             _validate(item, schema["items"], location + "[]")
     elif kind == "integer":
         if type(value) is not int or value < schema["minimum"]:
-            raise ValueError(f"Codex {location} must be a positive integer")
+            raise ValueError(f"Codex {location} must be an integer >= {schema['minimum']}")
     elif kind == "string":
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"Codex {location} must be a non-empty string")

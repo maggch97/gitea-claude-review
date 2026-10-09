@@ -13,7 +13,7 @@ from gitea_claude_review import claude
 from gitea_claude_review.claude import Finding, Resolution, parse_answer
 from gitea_claude_review.diff import changed_files, parse_unified_diff
 from gitea_claude_review.gitea import Gitea, GiteaError
-from gitea_claude_review.publish import fingerprint, split_anchorable, supports_resolve_api
+from gitea_claude_review.publish import ANY_SUMMARY_RE, REVIEW_ID_RE, Markers, fingerprint, split_anchorable, supports_resolve_api
 
 
 class DiffTest(unittest.TestCase):
@@ -103,6 +103,35 @@ class AnchorTest(unittest.TestCase):
         for version, expected in [("1.25.5", False), ("1.26.0", True), ("1.27.3", True), ("1.26.0+dev-12-gabc", True),
                                   ("28.1.0", True), ("", False), ("dev", False)]:
             self.assertEqual(supports_resolve_api(version), expected, version)
+
+
+class MarkersTest(unittest.TestCase):
+    def test_empty_id_keeps_the_original_marker_texts(self):
+        legacy = Markers()
+        self.assertEqual(legacy.summary, "<!-- gitea-claude-review:summary -->")
+        self.assertEqual(legacy.finding("abcdef012345"), "<!-- gitea-claude-review:finding:abcdef012345 -->")
+        self.assertEqual(legacy.fixed("111111111111"), "<!-- gitea-claude-review:fixed:111111111111 -->")
+        self.assertEqual(legacy.finding_re.findall("x <!-- gitea-claude-review:finding:abcdef012345 --> y"), ["abcdef012345"])
+
+    def test_namespaced_markers_do_not_match_each_other(self):
+        design, legacy = Markers("design"), Markers()
+        self.assertEqual(design.summary, "<!-- gitea-claude-review:design:summary -->")
+        body = design.finding("abcdef012345") + "\n" + design.fixed("111111111111")
+        self.assertEqual(design.finding_re.findall(body), ["abcdef012345"])
+        self.assertTrue(design.fixed_re.search(body))
+        self.assertEqual(legacy.finding_re.findall(body), [])
+        self.assertIsNone(legacy.fixed_re.search(body))
+        self.assertEqual(Markers("sec").finding_re.findall(body), [])
+        self.assertNotIn(legacy.summary, design.summary)
+        for marker in (design.summary, legacy.summary):
+            self.assertTrue(ANY_SUMMARY_RE.search(marker))
+        self.assertIsNone(ANY_SUMMARY_RE.search(design.finding("abcdef012345")))
+
+    def test_review_id_charset(self):
+        for ok in ("design", "sec-2", "a_b", "x" * 32):
+            self.assertTrue(REVIEW_ID_RE.fullmatch(ok), ok)
+        for bad in ("Design", "has space", "-lead", "x" * 33, "a:b", "design\n"):
+            self.assertIsNone(REVIEW_ID_RE.fullmatch(bad), bad)
 
 
 class RetryTest(unittest.TestCase):
