@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import claude, prompts, publish
+from . import claude, codex, prompts, publish
 from .diff import changed_files, parse_unified_diff
 from .gitea import Gitea
 
@@ -45,12 +45,36 @@ class Config:
     fail_on: str = "none"
     fail_on_error: bool = False
     show_cost: bool = False
+    provider: str = "claude"
+    codex_bin: str = "codex"
+    codex_effort: str = ""
+    codex_yolo: bool = False
+    codex_auth_mode: str = "chatgpt"
+    codex_home: str = ""
+    codex_auth_json: str = ""
+    openai_api_key: str = ""
+    codex_access_token: str = ""
+    codex_auth_storage: str = "gitea-secret"
+    codex_secret_name: str = "CODEX_AUTH_JSON"
+    codex_secrets_token: str = ""
+
+    @property
+    def reviewer(self) -> str:
+        return "Codex" if self.provider == "codex" else "Claude"
 
 
 def _bool(value: str, default: bool) -> bool:
     if value == "":
         return default
     return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _codex_yolo(value: str) -> bool:
+    # Permission settings must reject typos instead of silently selecting a mode.
+    normalized = value.strip().lower()
+    if normalized not in ("", "true", "false"):
+        raise ValueError("codex_yolo must be true or false")
+    return normalized == "true"
 
 
 def load_config(env: dict[str, str] | None = None) -> Config:
@@ -82,6 +106,18 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         fail_on=(get("FAIL_ON") or "none").lower(),
         fail_on_error=_bool(get("FAIL_ON_ERROR"), False),
         show_cost=_bool(get("SHOW_COST"), False),
+        provider=(get("PROVIDER") or "claude").lower(),
+        codex_bin=get("CODEX_BIN") or "codex",
+        codex_effort=get("CODEX_EFFORT"),
+        codex_yolo=_codex_yolo(get("CODEX_YOLO")),
+        codex_auth_mode=get("CODEX_AUTH_MODE") or "chatgpt",
+        codex_home=get("CODEX_HOME"),
+        codex_auth_json=get("CODEX_AUTH_JSON"),
+        openai_api_key=get("OPENAI_API_KEY"),
+        codex_access_token=get("CODEX_ACCESS_TOKEN"),
+        codex_auth_storage=get("CODEX_AUTH_STORAGE") or "gitea-secret",
+        codex_secret_name=get("CODEX_SECRET_NAME") or "CODEX_AUTH_JSON",
+        codex_secrets_token=get("CODEX_SECRETS_TOKEN"),
     )
 
 
@@ -118,12 +154,12 @@ def checkout_pull_head(workspace: str, number: int, sha: str, token: str = "") -
 
 
 def strip_checkout_credentials(workspace: str) -> None:
-    """actions/checkout may persist the job token in .git/config; Claude can read files."""
+    """actions/checkout may persist the job token in .git/config; agents can read files."""
     out = git(workspace, "config", "--local", "--name-only", "--get-regexp", r"^http\..*\.extraheader$", check=False)
     for key in sorted({line.strip() for line in out.splitlines() if line.strip()}):
         git(workspace, "config", "--local", "--unset-all", key, check=False)
     if out.strip():
-        log("Removed persisted checkout credentials from .git/config before running Claude.")
+        log("Removed persisted checkout credentials from .git/config before running the reviewer.")
 
 
 def read_rules(cfg: Config) -> str:
@@ -144,11 +180,42 @@ def write_diff(cfg: Config, number: int, diff_text: str) -> str:
 
 
 def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
-    cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)
-    log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns)")
     started = time.monotonic()
-    answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
-    log(f"Claude finished in {time.monotonic() - started:.0f}s with {len(answer.findings)} finding(s)")
+    if cfg.provider == "codex":
+        mode = "YOLO" if cfg.codex_yolo else "read-only"
+        log(f"Running Codex ({cfg.model or 'default model'}, auth: {cfg.codex_auth_mode}, mode: {mode})")
+        # Codex enforces JSON Schema directly; sentinel lines are Claude's contract.
+        prompt = prompt.replace(prompts.OUTPUT_CONTRACT, prompts.CODEX_OUTPUT_CONTRACT)
+        persist_auth = None
+        if cfg.codex_auth_mode == "chatgpt" and cfg.codex_auth_storage == "gitea-secret":
+            if not cfg.codex_secrets_token or not re.fullmatch(r"[A-Z_][A-Z0-9_]*", cfg.codex_secret_name):
+                raise ValueError("Secret auth requires codex_secrets_token and an uppercase codex_secret_name")
+            if not cfg.server_url.startswith("https://"):
+                raise ValueError("Codex Secret write-back requires an HTTPS Gitea server")
+            if cfg.codex_home or cfg.openai_api_key or cfg.codex_access_token:
+                raise ValueError("Secret auth cannot use codex_home or API/access tokens")
+            codex.read_auth(cfg.codex_auth_json)
+            owner, repo = cfg.repository.split("/", 1)
+            secret_client = Gitea(cfg.server_url, cfg.codex_secrets_token, owner, repo)
+            secret_client.check_secret_access(cfg.codex_secret_name)
+            # Listing Secrets alone does not prove the token has write scopes.
+            # Verify a same-value PUT before the CLI can rotate the credential.
+            secret_client.update_secret(cfg.codex_secret_name, cfg.codex_auth_json)
+            persist_auth = lambda value: secret_client.update_secret(cfg.codex_secret_name, value)
+        answer = codex.run_codex(
+            prompt, cfg.codex_bin, cfg.model, cfg.codex_effort, cfg.workspace, cfg.timeout_minutes * 60,
+            auth_mode=cfg.codex_auth_mode, account_home=cfg.codex_home, auth_json=cfg.codex_auth_json,
+            api_key=cfg.openai_api_key, access_token=cfg.codex_access_token,
+            auth_storage=cfg.codex_auth_storage, persist_auth=persist_auth,
+            yolo=cfg.codex_yolo,
+        )
+    elif cfg.provider == "claude":
+        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)
+        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns)")
+        answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
+    else:
+        raise ValueError("provider must be claude or codex")
+    log(f"{cfg.reviewer} finished in {time.monotonic() - started:.0f}s with {len(answer.findings)} finding(s)")
     if not answer.structured:
         annotate("warning", "Claude did not return the JSON block; posting its text as the summary.")
     return answer
@@ -159,7 +226,7 @@ def gate(cfg: Config, answer: claude.ClaudeAnswer) -> int:
         return 0
     worst = max((SEVERITY_RANK.get(f.severity, 0) for f in answer.findings), default=0)
     if worst >= SEVERITY_RANK[cfg.fail_on]:
-        annotate("error", f"Claude review reported a finding at or above '{cfg.fail_on}'.")
+        annotate("error", f"{cfg.reviewer} review reported a finding at or above '{cfg.fail_on}'.")
         return 1
     return 0
 
@@ -212,7 +279,7 @@ def review_pull(cfg: Config, gitea: Gitea, number: int, event_sha: str = "") -> 
                 "fixed findings get a banner but stay unresolved.")
     stats = publish.publish_review(
         gitea, number, head_sha, bot, answer, parse_unified_diff(diff_text),
-        publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost),
+        publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost, cfg.reviewer),
         posted, resolve_api, inline=cfg.inline_comments, markers=markers,
     )
     log(f"Review posted: {stats}")
@@ -233,7 +300,7 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
         return 0
     permission = gitea.permission(author)
     if PERMISSION_RANK.get(permission, 0) < PERMISSION_RANK.get(cfg.mention_permission, 2):
-        log(f"@{author} has '{permission}' permission; '{cfg.mention_permission}' is required to trigger Claude.")
+        log(f"@{author} has '{permission}' permission; '{cfg.mention_permission}' is required to trigger {cfg.reviewer}.")
         return 0
 
     number = int(issue.get("number"))
@@ -264,14 +331,14 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     inline = cfg.inline_comments and pr is not None
     anchored, loose = publish.split_anchorable(answer.findings, lines) if inline else ([], list(answer.findings))
     quote = "\n".join("> " + line for line in body.strip().splitlines()[:6])
-    footer = publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost)
+    footer = publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost, cfg.reviewer)
     text = f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
     gitea.create_comment(number, text)
     if anchored:
         markers = publish.Markers(cfg.review_id)
         already = publish.suppressed(publish.posted_findings(gitea, number, bot, markers))
-        publish.post_inline(gitea, number, head_sha, anchored, already, "Claude: {count} inline finding(s) for @" + author + ".",
-                            markers)
+        publish.post_inline(gitea, number, head_sha, anchored, already,
+                            cfg.reviewer + ": {count} inline finding(s) for @" + author + ".", markers)
     return 0
 
 
@@ -292,7 +359,7 @@ def dispatch(cfg: Config, gitea: Gitea) -> int:
         return review_pull(cfg, gitea, number, (pull.get("head") or {}).get("sha", ""))
     if cfg.event_name in ("issue_comment", "pull_request_review_comment"):
         if (cfg.event.get("action") or "created") != "created":
-            log("Only newly created comments trigger Claude.")
+            log("Only newly created comments trigger the reviewer.")
             return 0
         return reply_mention(cfg, gitea)
     log(f"Event '{cfg.event_name}' is not handled; use pull_request or issue_comment.")
@@ -307,16 +374,24 @@ def main() -> int:
     if "/" not in cfg.repository or not cfg.server_url:
         annotate("error", "Could not determine the repository or server URL from the environment.")
         return 1
-    if cfg.review_id and not publish.REVIEW_ID_RE.match(cfg.review_id):
+    if cfg.review_id and not publish.REVIEW_ID_RE.fullmatch(cfg.review_id):
         annotate("error", f"review_id {cfg.review_id!r} is invalid: use 1-32 lowercase letters, digits, - or _.")
         return 1
     owner, repo = cfg.repository.split("/", 1)
     gitea = Gitea(cfg.server_url, cfg.gitea_token, owner, repo)
     try:
+        if cfg.provider not in ("claude", "codex"):
+            raise ValueError("provider must be claude or codex")
+        if cfg.provider == "codex" and cfg.codex_auth_mode == "chatgpt":
+            # OpenAI's account-auth CI workflow is restricted to private automation.
+            if gitea.repository_info().get("private") is not True:
+                raise ValueError("Codex ChatGPT account auth requires a private repository and trusted runner")
         return dispatch(cfg, gitea)
     except Exception as error:  # noqa: BLE001 - surface every failure as one annotation
-        annotate("error" if cfg.fail_on_error else "warning", f"Claude review failed: {error}")
-        return 1 if cfg.fail_on_error else 0
+        # Keep the published Claude option; new Codex failures always fail the job.
+        failed = cfg.fail_on_error or cfg.provider != "claude"
+        annotate("error" if failed else "warning", f"{cfg.reviewer} review failed: {error}")
+        return 1 if failed else 0
 
 
 if __name__ == "__main__":

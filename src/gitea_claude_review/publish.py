@@ -105,6 +105,7 @@ class Footer:
     cost_usd: float | None = None
     turns: int | None = None
     show_cost: bool = False
+    reviewer: str = "Claude"
 
 
 def footer_text(footer: Footer) -> str:
@@ -115,7 +116,7 @@ def footer_text(footer: Footer) -> str:
         parts.append(f"cost ${footer.cost_usd:.2f}")
     if footer.show_cost and footer.turns:
         parts.append(f"{footer.turns} turns")
-    return "\n\n<sub>Claude review · " + " · ".join(parts) + "</sub>" if parts else ""
+    return "\n\n<sub>" + footer.reviewer + " review · " + " · ".join(parts) + "</sub>" if parts else ""
 
 
 @dataclass
@@ -246,5 +247,7 @@ def publish_review(gitea: Gitea, number: int, head_sha: str, bot_login: str, ans
     summary = (answer.summary or "_No summary._") + loose_section(loose) + resolved_section(done) + footer_text(footer)
     upsert_summary(gitea, number, bot_login, summary, markers)
     already = suppressed(posted, {p.comment_id for p, _ in done})
-    new = post_inline(gitea, number, head_sha, anchored, already, "Claude review: {count} new inline finding(s).", markers)
+    # An empty review id preserves existing comments when switching providers.
+    new = post_inline(gitea, number, head_sha, anchored, already,
+                      footer.reviewer + " review: {count} new inline finding(s).", markers)
     return {"inline": new, "duplicates": len(anchored) - new, "outside_diff": len(loose), "fixed": len(done)}

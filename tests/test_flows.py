@@ -135,13 +135,13 @@ class FlowTest(unittest.TestCase):
         self.assertFalse(any(m == "PATCH" and "/issues/comments/" in p and p.endswith(str(comment["id"]))
                              for m, p, _ in self.gitea.calls))
 
-    def test_reviews_with_different_ids_share_a_pull_request_without_touching_each_other(self):
+    def test_codex_reviews_with_different_ids_share_a_pull_request_without_touching_each_other(self):
         self.gitea.version = "1.26.0"
         self.review()  # the default review posts its summary and the "Wrong default" finding
         default_finding = self.gitea.reviews[0]["comments"][0]
         design_answer = ClaudeAnswer(summary="Wrong layer.", findings=[Finding("src/app.py", 3, "new", "medium", "Belongs elsewhere", "move it")])
         self.answer = design_answer
-        self.assertEqual(self.review(review_id="design"), 0)
+        self.assertEqual(self.review(provider="codex", review_id="design"), 0)
         summaries = sorted(c["body"].splitlines()[0] for c in self.gitea.comments)
         self.assertEqual(summaries, ["<!-- gitea-claude-review:design:summary -->", "<!-- gitea-claude-review:summary -->"])
         self.assertEqual(len(self.gitea.reviews), 2)
@@ -153,8 +153,9 @@ class FlowTest(unittest.TestCase):
         # Each review edits only its own summary, and may only close out its own findings.
         self.gitea.pull["head"]["sha"] = "1234567890abcdef"
         self.answer = ClaudeAnswer(summary="Design ok now.", resolved=[Resolution(default_finding["id"], "not mine")])
-        self.assertEqual(self.review(review_id="design"), 0)
+        self.assertEqual(self.review(provider="codex", review_id="design"), 0)
         self.assertEqual(len(self.gitea.comments), 2)
+        self.assertIn("Codex review", self.gitea.comments[-1]["body"])
         self.assertIn("Design ok now.", [c["body"] for c in self.gitea.comments if "design:summary" in c["body"]][0])
         self.assertIn("One real problem.", [c["body"] for c in self.gitea.comments if "design:summary" not in c["body"]][0])
         self.assertNotIn("Fixed in", default_finding["body"])
@@ -162,7 +163,7 @@ class FlowTest(unittest.TestCase):
         self.assertNotIn(f"id {default_finding['id']}", self.prompts[2])
 
         self.answer = ClaudeAnswer(summary="Still one problem.")
-        self.assertEqual(self.review(), 0)
+        self.assertEqual(self.review(provider="codex"), 0)
         self.assertIn(f"id {default_finding['id']}", self.prompts[3])
         self.assertNotIn(f"id {design_finding['id']}", self.prompts[3])
         self.assertEqual(len(self.gitea.comments), 2)
@@ -217,13 +218,13 @@ class FlowTest(unittest.TestCase):
         edited("WIP: Add feature", "Add feature")
         self.assertEqual(len(self.prompts), 1)
 
-    def mention(self, author: str, body: str, is_pull: bool = True) -> int:
+    def mention(self, author: str, body: str, is_pull: bool = True, **overrides) -> int:
         event = {
             "action": "created",
             "comment": {"id": 55, "body": body, "user": {"login": author}},
             "issue": {"number": 7, "title": "Add feature", "body": "", "pull_request": {"merged": False} if is_pull else None},
         }
-        return main.dispatch(config(self.workspace, "issue_comment", event), self.gitea.client())
+        return main.dispatch(config(self.workspace, "issue_comment", event, **overrides), self.gitea.client())
 
     def test_mention_reply_requires_permission(self):
         self.answer = ClaudeAnswer(summary="Because x is read twice.")
@@ -243,6 +244,23 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.mention("alice", "no trigger here"), 0)
         self.assertEqual(self.mention("review-bot", "@claude loop?"), 0)
         self.assertEqual(self.prompts, [])
+
+    def test_codex_design_mentions_exclude_all_summaries_and_namespace_findings(self):
+        self.answer = ClaudeAnswer(summary="Legacy automated summary.")
+        self.review()
+        self.answer = ClaudeAnswer(summary="Design automated summary.")
+        self.review(provider="codex", review_id="design", inline_comments=False)
+        self.answer = ClaudeAnswer(summary="New design answer.", findings=[
+            Finding("src/app.py", 3, "new", "medium", "Wrong layer", "Move it.")])
+        self.assertEqual(self.mention("alice", "@design-review explain", provider="codex",
+                                     review_id="design", trigger_phrase="@design-review"), 0)
+        self.assertNotIn("Legacy automated summary.", self.prompts[-1])
+        self.assertNotIn("Design automated summary.", self.prompts[-1])
+        reply = self.gitea.comments[-1]["body"]
+        self.assertIn("Codex review", reply)
+        finding = self.gitea.reviews[-1]["comments"][0]["body"]
+        self.assertIn("<!-- gitea-claude-review:design:finding:", finding)
+        self.assertTrue(self.gitea.reviews[-1]["body"].startswith("Codex:"))
 
     def test_invalid_review_id_fails_before_anything_runs(self):
         bad = config(self.workspace, "pull_request", {"pull_request": {"number": 7}}, review_id="Design Review")

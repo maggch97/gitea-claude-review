@@ -129,9 +129,9 @@ class MarkersTest(unittest.TestCase):
 
     def test_review_id_charset(self):
         for ok in ("design", "sec-2", "a_b", "x" * 32):
-            self.assertTrue(REVIEW_ID_RE.match(ok), ok)
-        for bad in ("Design", "has space", "-lead", "x" * 33, "a:b"):
-            self.assertIsNone(REVIEW_ID_RE.match(bad), bad)
+            self.assertTrue(REVIEW_ID_RE.fullmatch(ok), ok)
+        for bad in ("Design", "has space", "-lead", "x" * 33, "a:b", "design\n"):
+            self.assertIsNone(REVIEW_ID_RE.fullmatch(bad), bad)
 
 
 class RetryTest(unittest.TestCase):

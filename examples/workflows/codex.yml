@@ -1,0 +1,46 @@
+# .gitea/workflows/codex.yml — private repository, trusted Linux runner only.
+# Requires Gitea 1.26+ with server-side concurrency support and repository
+# Secrets CODEX_AUTH_JSON and CODEX_SECRETS_TOKEN. No persistent mount required.
+name: Codex
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+# A single group for ALL jobs using this token bundle, across PRs/workflows.
+# Never use a PR number/ref in this group or cancel a job that may rotate auth.
+# Gitea concurrency is repository-scoped: do not share this bundle across repos.
+concurrency:
+  group: codex-account-auth
+  cancel-in-progress: false
+
+jobs:
+  codex:
+    # Keep the existing bot account if you want to update its earlier comments.
+    if: >-
+      github.event_name == 'pull_request' ||
+      (contains(github.event.comment.body, '@codex') && github.event.comment.user.login != 'claude-bot')
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Pinned to the implementation commit; update after reviewing a newer release.
+      - uses: https://github.com/maggch97/gitea-claude-review@c6f939b0a55bf22ca7194d690fb4a862f3f418ff
+        with:
+          provider: codex
+          gitea_token: ${{ secrets.CLAUDE_GITEA_TOKEN }}
+          codex_auth_mode: chatgpt
+          codex_auth_storage: gitea-secret
+          codex_auth_json: ${{ secrets.CODEX_AUTH_JSON }}
+          codex_secrets_token: ${{ secrets.CODEX_SECRETS_TOKEN }}
+          codex_version: '0.162.0'
+          trigger_phrase: '@codex'
+          rules_file: .gitea/claude/REVIEW.md
+          language: Simplified Chinese
+          timeout_minutes: '60'
+          wip_policy: fail

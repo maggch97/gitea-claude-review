@@ -47,6 +47,17 @@ Ground rules:
 - Do not open binary files (images, archives, executables).
 """
 
+# Same business fields as the Claude block, enforced by Codex's output schema.
+CODEX_OUTPUT_CONTRACT = """\
+Return only the JSON object required by the output schema, without Markdown fences
+or sentinel lines. The summary is Markdown for people; findings become inline
+comments. Every finding must point to code verified in this checkout, with a
+repository-relative path, a positive line number, side new/old, severity
+blocker/high/medium/low, title and body. Use empty findings when nothing is found.
+The resolved array contains only ids of earlier findings verified fixed in the
+current code and a non-empty explanation; otherwise return an empty array.
+"""
+
 
 def _rules_section(repo_rules: str) -> str:
     if repo_rules.strip():
