@@ -1,7 +1,8 @@
 """Run Claude Code headless and read its structured answer.
 
 The model never receives the Gitea token: the subprocess gets an allowlisted
-environment, only read-only tools, and returns JSON that this action posts.
+environment and returns JSON that this action posts. Tools are restricted unless
+the workflow explicitly enables YOLO mode.
 """
 
 from __future__ import annotations
@@ -68,15 +69,17 @@ def claude_env(source: dict[str, str] | None = None) -> dict[str, str]:
     }
 
 
-def build_command(claude_bin: str, model: str, max_turns: int, allowed_bash: list[str]) -> list[str]:
+def build_command(claude_bin: str, model: str, max_turns: int, allowed_bash: list[str], *, yolo: bool = False) -> list[str]:
     allowed = READ_ONLY_TOOLS + [f"Bash({pattern})" for pattern in allowed_bash]
     cmd = [
         claude_bin, "-p",
         "--output-format", "stream-json", "--verbose",
         "--max-turns", str(max_turns),
-        "--allowedTools", ",".join(allowed),
-        "--disallowedTools", ",".join(DENIED_TOOLS),
     ]
+    if yolo:
+        cmd += ["--dangerously-skip-permissions"]
+    else:
+        cmd += ["--allowedTools", ",".join(allowed), "--disallowedTools", ",".join(DENIED_TOOLS)]
     if model:
         cmd += ["--model", model]
     return cmd

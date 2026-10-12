@@ -10,7 +10,7 @@ from unittest import mock
 
 from helpers import DIFF
 
-from gitea_claude_review import claude
+from gitea_claude_review import claude, main
 from gitea_claude_review.claude import Finding, Resolution, parse_answer
 from gitea_claude_review.diff import changed_files, parse_unified_diff
 from gitea_claude_review.gitea import Gitea, GiteaError
@@ -84,6 +84,16 @@ class AnswerTest(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--model") + 1], "opus")
         self.assertEqual(cmd[cmd.index("--output-format") + 1], "stream-json")
         self.assertIn("--verbose", cmd)
+
+    def test_claude_yolo_omits_tool_restrictions_and_rejects_typos(self):
+        cmd = claude.build_command("claude", "opus", 30, ["git diff:*"], yolo=True)
+        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertNotIn("--allowedTools", cmd)
+        self.assertNotIn("--disallowedTools", cmd)
+        self.assertTrue(main.load_config({"GCR_CLAUDE_YOLO": "true"}).claude_yolo)
+        self.assertFalse(main.load_config({}).claude_yolo)
+        with self.assertRaisesRegex(ValueError, "claude_yolo"):
+            main.load_config({"GCR_CLAUDE_YOLO": "typo"})
 
 
 class AnchorTest(unittest.TestCase):

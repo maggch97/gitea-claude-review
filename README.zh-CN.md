@@ -13,7 +13,7 @@
   （需 Gitea 1.26+，这是第一个有解决对话 API 的版本；更早的版本只加标记）。被人手动解决的评论不动、也不再重发。
 - **在任意 issue 或 PR 评论里 `@claude`**，可以提问或要求重新审查。
 - **不依赖第三方审查 action**：一个组合 action，安装所选 CLI 后运行只用标准库的 Python。
-- **Gitea 令牌不交给模型**：Claude 用只读工具，Codex 默认用只读 sandbox，也可显式开启 YOLO，由本 action 负责发评论。
+- **Gitea 令牌不交给模型**：Claude 默认用只读工具，Codex 默认用只读 sandbox；两者均可显式开启 YOLO，由本 action 负责发评论。
 
 按 Gitea 的 API 设计（行号锚点、`/pulls/{n}.diff`、没有 GraphQL），不是从只支持 GitHub 的 action 移植过来的。
 
@@ -119,6 +119,7 @@ HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error
 | `provider` | `claude` | 后端：`claude` / `codex` |
 | `model` | 所选 CLI 默认 | 模型 id 或别名 |
 | `claude_code_version` | `stable` | 建议固定版本（如 `2.1.284`），结果可复现 |
+| `claude_yolo` | `false` | 跳过权限确认，不传工具允许/禁止列表；此时 `allowed_bash` 不限制命令。保留审查任务约束、凭证隔离、超时和轮数限制 |
 | `rules_file` | `.gitea/claude/REVIEW.md` | 仓库里的审查规则文件，不存在时用内置通用规则 |
 | `language` | — | 评论语言，例如 `Simplified Chinese` |
 | `review_id` | — | 评论标记的命名空间。同一个 PR 上要跑多条互不干扰的 review（如正确性 + 设计）时，给每条审查不同的 id，并配不同的 `trigger_phrase` |
@@ -149,6 +150,9 @@ provider 不会自动隔离命名空间；相同 id 表示有意共享历史并�
 
 ## 实时进度日志
 
+Claude 安装分别输出下载、安装和可执行文件检查阶段。下载连接超时 20 秒、单次总超时 60 秒，
+最多重试一次；安装限时五分钟，失败直接终止 job。设置 `claude_code_executable` 可使用已有程序跳过安装。
+
 Claude 与 Codex 默认实时输出模型文字反馈、工具调用与结果、命令完成状态和 CLI 诊断信息，
 无需增加模型调用。Claude 使用 `stream-json --verbose`，Codex 消费现有 JSONL 事件。
 不输出 thinking/reasoning 块、输入 prompt 或未知协议载荷；日志不会被放入其他审查的上下文。
@@ -162,7 +166,7 @@ Claude 与 Codex 默认实时输出模型文字反馈、工具调用与结果、
 
 - 模型环境采用白名单，排除 Gitea 审查和 Secret 管理 token。Codex 只接收显式选择的认证凭据。
 - 运行审查前清掉 checkout 写进 `.git/config` 的凭证；拉取 PR 分支时用一次性的请求头，不落盘。
-- PR 内容视为不可信输入；提示词要求忽略其中的指令，CLI 限制为只读，Action 校验并发布结果。
+- PR 内容视为不可信输入；提示词要求忽略其中的指令，CLI 默认限制为只读（YOLO 模式除外），Action 校验并发布结果。
 - 评论触发需要 `mention_permission`（默认写权限），陌生人无法通过评论消耗模型额度。
 
 ## 开发
