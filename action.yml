@@ -167,15 +167,26 @@ runs:
           "$CLAUDE_EXECUTABLE" --version
           exit 0
         fi
-        installer="$(mktemp)"
-        trap 'rm -f "$installer"' EXIT
-        echo "Downloading Claude Code installer (60s per attempt, one retry)..."
-        curl -fsSL --connect-timeout 20 --max-time 60 --retry 1 \
-          https://claude.ai/install.sh -o "$installer"
-        echo "Installing Claude Code $CLAUDE_VERSION (5 minute timeout)..."
-        timeout --signal=TERM --kill-after=10s 300 bash "$installer" "$CLAUDE_VERSION"
-        echo "Claude Code installation completed; checking executable..."
-        bin="$HOME/.local/bin/claude"
+        command -v npm >/dev/null || { echo "::error::Claude installation requires npm on the runner."; exit 1; }
+        version="$CLAUDE_VERSION"
+        if [[ "$version" == stable || "$version" == latest ]]; then
+          echo "Resolving Claude Code channel $version..."
+          version="$(curl -fsSL --connect-timeout 20 --max-time 60 --retry 1 \
+            "https://downloads.claude.ai/claude-code-releases/$version")"
+        fi
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+          echo "::error::Claude Code version must resolve to a concrete release." >&2
+          exit 1
+        fi
+        # Install the requested release directly; install.sh first downloads latest
+        # and then launches another installer, even when a version was specified.
+        prefix="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gcr-claude-cli.XXXXXX")"
+        echo "Installing Claude Code $version from npm (download logs enabled)..."
+        timeout --signal=TERM --kill-after=10s 600 npm install --prefix "$prefix" \
+          --no-audit --no-fund --loglevel=http --fetch-timeout=60000 --fetch-retries=1 \
+          "@anthropic-ai/claude-code@$version"
+        bin="$prefix/node_modules/.bin/claude"
+        echo "Claude Code package installed; checking executable..."
         "$bin" --version
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
 

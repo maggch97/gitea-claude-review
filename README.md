@@ -258,10 +258,14 @@ with:
 
 ## Live progress logs
 
-The Claude installer prints separate download, installation and executable-check
-stages. Download attempts have a 20-second connect timeout and 60-second overall
-timeout, with one retry; installation has a five-minute timeout. A failed stage
-fails the job. `claude_code_executable` skips installation when a binary is supplied.
+Claude is installed from the official `@anthropic-ai/claude-code` npm package in
+a job-specific directory, directly at the requested version. The native bootstrap
+script is not used: it downloads the latest CLI before installing the requested
+release. npm is required on the runner. Channel names (`stable` / `latest`) are
+resolved to a concrete version using the official release endpoint first.
+Installation shows npm HTTP download logs, limits each fetch to 60 seconds with
+one retry, and has a ten-minute overall timeout. Failures stop the job.
+`claude_code_executable` still skips installation when a binary is supplied.
 
 Both backends stream progress to the Actions job log by default. Claude uses
 `--output-format stream-json --verbose`; Codex uses its existing `--json` events.

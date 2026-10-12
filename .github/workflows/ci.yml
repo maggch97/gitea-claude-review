@@ -50,3 +50,33 @@ jobs:
                   # --help parses both modes without reading account auth or calling a model.
                   subprocess.run(command + ['--help'], check=True, timeout=30)
           PY
+
+  claude-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Claude package
+        run: |
+          timeout --signal=TERM --kill-after=10s 600 npm install --prefix "$RUNNER_TEMP/claude" \
+            --no-audit --no-fund --loglevel=http --fetch-timeout=60000 --fetch-retries=1 \
+            @anthropic-ai/claude-code@2.1.284
+      - name: Check Claude CLI options without model usage
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import os, subprocess
+          from pathlib import Path
+          from gitea_claude_review.claude import build_command
+          binary = str(Path(os.environ['RUNNER_TEMP']) / 'claude/node_modules/.bin/claude')
+          subprocess.run([binary, '--version'], check=True, timeout=30)
+          for yolo in (False, True):
+              command = build_command(binary, 'claude-opus-5-5', 30, ['git diff:*'], yolo=yolo)
+              subprocess.run(command + ['--help'], check=True, timeout=30)
+          PY
