@@ -318,11 +318,8 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
         lines = parse_unified_diff(diff_text)
     strip_checkout_credentials(cfg.workspace)
 
-    thread = [
-        f"@{(c.get('user') or {}).get('login', '')}: {(c.get('body') or '')[:1500]}"
-        for c in gitea.issue_comments(number)
-        if c.get("id") != comment.get("id") and not publish.ANY_SUMMARY_RE.search(c.get("body") or "")
-    ]
+    markers = publish.Markers(cfg.review_id)
+    thread = publish.mention_context(gitea.issue_comments(number), comment.get("id"), bot, markers)
     request = body.replace(cfg.trigger_phrase, "", 1).strip() or body
     prompt = prompts.mention_prompt(
         request=request, author=author, issue=issue, pr=pr, diff_file=diff_file,
@@ -334,10 +331,9 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     anchored, loose = publish.split_anchorable(answer.findings, lines) if inline else ([], list(answer.findings))
     quote = "\n".join("> " + line for line in body.strip().splitlines()[:6])
     footer = publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost, cfg.reviewer)
-    text = f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
+    text = markers.reply + "\n" + f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
     gitea.create_comment(number, text)
     if anchored:
-        markers = publish.Markers(cfg.review_id)
         already = publish.suppressed(publish.posted_findings(gitea, number, bot, markers))
         publish.post_inline(gitea, number, head_sha, anchored, already,
                             cfg.reviewer + ": {count} inline finding(s) for @" + author + ".", markers)

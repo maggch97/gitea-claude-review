@@ -237,7 +237,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(len(self.prompts), 1)
         self.assertIn("why is y 3?", self.prompts[0])
         reply = self.gitea.comments[-1]["body"]
-        self.assertTrue(reply.startswith("> @claude why is y 3?"))
+        self.assertTrue(reply.startswith(publish.Markers().reply + "\n> @claude why is y 3?"))
         self.assertIn("@alice Because x is read twice.", reply)
         self.assertNotIn(publish.Markers().summary, reply)
 
@@ -262,6 +262,59 @@ class FlowTest(unittest.TestCase):
         finding = self.gitea.reviews[-1]["comments"][0]["body"]
         self.assertIn("<!-- gitea-claude-review:design:finding:", finding)
         self.assertTrue(self.gitea.reviews[-1]["body"].startswith("Codex:"))
+
+    def test_four_review_namespaces_only_receive_their_own_previous_findings(self):
+        reviews = [("codex", ""), ("codex", "design"),
+                   ("claude", "claude-correctness"), ("claude", "claude-design")]
+        for index, (provider, review_id) in enumerate(reviews):
+            self.answer = ClaudeAnswer(summary=f"Summary {index}", findings=[
+                Finding("src/app.py", 3, "new", "high", f"Isolated concern {index}", f"Evidence {index}")])
+            self.review(provider=provider, review_id=review_id)
+            self.assertNotIn("Isolated concern", self.prompts[-1])
+
+        self.answer = ClaudeAnswer(summary="Rechecked")
+        for index, (provider, review_id) in enumerate(reviews):
+            self.review(provider=provider, review_id=review_id)
+            for other in range(4):
+                if other == index:
+                    self.assertIn(f"Isolated concern {other}", self.prompts[-1])
+                else:
+                    self.assertNotIn(f"Isolated concern {other}", self.prompts[-1])
+        self.assertEqual(len(self.gitea.comments), 4)
+        self.assertEqual(len(self.gitea.reviews), 4)
+
+    def test_mentions_only_receive_own_replies_and_human_discussion(self):
+        reviews = [("codex", "", "@codex"), ("codex", "design", "@design-review"),
+                   ("claude", "claude-correctness", "@claude"),
+                   ("claude", "claude-design", "@design-claude")]
+        self.gitea.comments.extend([
+            {"id": 1, "user": {"login": "alice"}, "body": "Human context about requirements"},
+            {"id": 2, "user": {"login": "REVIEW-BOT"}, "body": "Old unmarked reply"},
+            {"id": 3, "user": {"login": "other-bot"},
+             "body": "Legacy other bot answer\n<sub>Claude review · model `opus`</sub>"},
+            {"id": 4, "user": {"login": "other-bot"},
+             "body": "Foreign marked answer" + "x" * 1600 + publish.Markers("foreign").reply},
+            {"id": 55, "user": {"login": "alice"}, "body": "Current event duplicate"},
+        ])
+        for index, (provider, review_id, trigger) in enumerate(reviews):
+            self.answer = ClaudeAnswer(summary=f"Private reply {index}")
+            self.mention("alice", trigger + " explain", provider=provider,
+                         review_id=review_id, trigger_phrase=trigger)
+            self.assertTrue(self.gitea.comments[-1]["body"].startswith(publish.Markers(review_id).reply + "\n"))
+
+        self.answer = ClaudeAnswer(summary="Follow-up answer")
+        for index, (provider, review_id, trigger) in enumerate(reviews):
+            self.mention("alice", trigger + " elaborate", provider=provider,
+                         review_id=review_id, trigger_phrase=trigger)
+            prompt = self.prompts[-1]
+            self.assertIn("Human context about requirements", prompt)
+            for hidden in ("Old unmarked reply", "Legacy other bot answer", "Foreign marked answer", "Current event duplicate"):
+                self.assertNotIn(hidden, prompt)
+            for other in range(4):
+                if other == index:
+                    self.assertIn(f"Private reply {other}", prompt)
+                else:
+                    self.assertNotIn(f"Private reply {other}", prompt)
 
     def test_invalid_review_id_fails_before_anything_runs(self):
         bad = config(self.workspace, "pull_request", {"pull_request": {"number": 7}}, review_id="Design Review")

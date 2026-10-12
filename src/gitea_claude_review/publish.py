@@ -28,6 +28,8 @@ REVIEW_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 # Summary marker of any review, namespaced or not: used to keep summaries out of
 # the comment thread handed to the model on mentions.
 ANY_SUMMARY_RE = re.compile(r"<!-- gitea-claude-review:(?:[a-z0-9_-]+:)?summary -->")
+ANY_REVIEW_MARKER_RE = re.compile(r"<!--\s*gitea-claude-review:")
+REVIEW_FOOTER_RE = re.compile(r"<sub>(?:Claude|Codex) review · ")
 
 
 @dataclass(frozen=True)
@@ -51,6 +53,10 @@ class Markers:
     def summary(self) -> str:
         return f"<!-- {self.prefix}summary -->"
 
+    @property
+    def reply(self) -> str:
+        return f"<!-- {self.prefix}reply -->"
+
     def finding(self, fp: str) -> str:
         return f"<!-- {self.prefix}finding:{fp} -->"
 
@@ -65,6 +71,29 @@ class Markers:
     @property
     def fixed_re(self) -> re.Pattern:
         return re.compile(rf"<!-- {re.escape(self.prefix)}fixed:[0-9a-f]+ -->")
+
+
+def mention_context(comments: list[dict], current_id: int, bot_login: str, markers: Markers) -> list[str]:
+    """Keep human discussion and this review's replies, never another review's output.
+
+    Old unmarked bot replies have no trustworthy namespace, so exclude them.
+    Filter before truncating: markers can be at the end of a long comment.
+    """
+    thread = []
+    for comment in comments:
+        if comment.get("id") == current_id:
+            continue
+        body = comment.get("body") or ""
+        author = (comment.get("user") or {}).get("login", "")
+        if author.lower() == bot_login.lower():
+            # Only an exact leading reply marker proves ownership. Summaries and
+            # inline findings already have separate, namespace-scoped handling.
+            if not body.startswith(markers.reply + "\n"):
+                continue
+        elif ANY_REVIEW_MARKER_RE.search(body) or REVIEW_FOOTER_RE.search(body):
+            continue
+        thread.append(f"@{author}: {body[:1500]}")
+    return thread
 
 
 _TITLE_RE = re.compile(r"\*\*\[[a-z]+\] (.+?)\*\*")
