@@ -63,9 +63,7 @@ jobs:
           python-version: '3.12'
       - name: Install pinned Claude package
         run: |
-          timeout --signal=TERM --kill-after=10s 600 npm install --prefix "$RUNNER_TEMP/claude" \
-            --no-audit --no-fund --loglevel=http --fetch-timeout=60000 --fetch-retries=1 \
-            @anthropic-ai/claude-code@2.1.284
+          bash scripts/install-claude.sh 2.1.284 "$RUNNER_TEMP/claude"
       - name: Check Claude CLI options without model usage
         env:
           PYTHONPATH: src

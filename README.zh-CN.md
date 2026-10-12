@@ -152,8 +152,9 @@ provider 不会自动隔离命名空间；相同 id 表示有意共享历史并�
 
 Claude 通过官方 `@anthropic-ai/claude-code` npm 包直接安装指定版本，使用每个 job 独立的目录，
 不再调用会先下载最新版再安装指定版的原生引导脚本。runner 需提供 npm；`stable` / `latest` 渠道名
-先通过官方发布端点解析为明确版本。安装输出 npm HTTP 下载日志，每次下载限时 60 秒、最多重试一次，
-整体限时十分钟，失败直接终止 job。`claude_code_executable` 仍可使用已有程序跳过安装。
+先通过官方发布端点解析为明确版本。安装输出 npm HTTP 下载日志，每次下载限时五分钟、最多重试一次，
+整体限时十五分钟。Linux 原生包作为必需依赖安装，下载失败直接终止 job；显式运行官方二进制链接脚本，
+不依赖 npm 的生命周期脚本审批默认值。`claude_code_executable` 仍可使用已有程序跳过安装。
 
 Claude 与 Codex 默认实时输出模型文字反馈、工具调用与结果、命令完成状态和 CLI 诊断信息，
 无需增加模型调用。Claude 使用 `stream-json --verbose`，Codex 消费现有 JSONL 事件。

@@ -181,13 +181,8 @@ runs:
         # Install the requested release directly; install.sh first downloads latest
         # and then launches another installer, even when a version was specified.
         prefix="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gcr-claude-cli.XXXXXX")"
-        echo "Installing Claude Code $version from npm (download logs enabled)..."
-        timeout --signal=TERM --kill-after=10s 600 npm install --prefix "$prefix" \
-          --no-audit --no-fund --loglevel=http --fetch-timeout=60000 --fetch-retries=1 \
-          "@anthropic-ai/claude-code@$version"
+        bash "${{ github.action_path }}/scripts/install-claude.sh" "$version" "$prefix"
         bin="$prefix/node_modules/.bin/claude"
-        echo "Claude Code package installed; checking executable..."
-        "$bin" --version
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
 
     - name: Install Codex
