@@ -219,6 +219,20 @@ review its own `review_id`: summaries, findings and fixed banners are tracked
 separately. Give it its own `trigger_phrase` too. An empty id preserves comments
 from earlier versions, including when switching from Claude to Codex.
 
+For independent Claude and Codex reviews, assign a different `review_id` to every
+job (for example `codex-correctness`, `codex-design`, `claude-correctness`, and
+`claude-design`). Providers do not implicitly namespace comments: reusing an id
+deliberately shares history and updates the same summary. Existing jobs can keep
+their ids while new jobs receive unique ones.
+
+Automatic reviews receive only their own namespace's open findings. Mention
+replies receive human discussion and replies marked as belonging to the same
+review, excluding all review summaries, other namespaces' replies and unmarked
+bot replies whose ownership cannot be determined. Marked comments from other bot
+accounts and legacy Claude/Codex review footers are also excluded. Filtering
+happens before context truncation. This isolates action-supplied comment history;
+it does not redact another review manually quoted in a human request or PR text.
+
 When sharing a ChatGPT login on Gitea, put the review jobs in one workflow with
 workflow-level concurrency and chain them using `needs`. Separate workflows in
 the same concurrency group can replace each other's pending reviews. Keep the

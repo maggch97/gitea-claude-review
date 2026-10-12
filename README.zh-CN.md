@@ -131,6 +131,16 @@ HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error
 正确性与设计审查可以共用机器人，用 `review_id: design` 隔离设计总评论、行级问题和修复标记；
 空 id 保持已有评论标记，Claude 切到 Codex 后也能继续更新。触发词分别设置，避免同一条评论启动两种审查。
 
+Claude 与 Codex 独立审查时，每个 job 必须使用不同的 `review_id`，例如
+`codex-correctness`、`codex-design`、`claude-correctness`、`claude-design`。
+provider 不会自动隔离命名空间；相同 id 表示有意共享历史并更新同一条总评论。
+已有 job 可以保留原 id，新 job 使用独立 id。
+
+自动审查只接收自身命名空间的未解决 findings。提问回复只接收人工讨论和本审查带归属标记的回复，
+排除所有总评论、其他命名空间的回复，以及无法确定归属的旧机器人回复。
+其他机器人账号发布的带标记评论或带 Claude/Codex review 页脚的旧回复也被排除，过滤发生在文本截断之前。
+隔离范围是 action 自动提供的评论历史；人工在当前提问或 PR 正文中引用另一份审查的文字不会被自动删改。
+
 共用同一份 ChatGPT 登录时，在同一个工作流内设置 workflow 级并发分组，并用 `needs` 串行安排审查 job。
 独立工作流共用并发分组会竞争等待位置，可能取消对方的等待运行。
 两条审查使用同一个固定 Action 版本和相同认证配置，并可分别设为必需检查。
