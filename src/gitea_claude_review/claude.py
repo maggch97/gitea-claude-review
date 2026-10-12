@@ -1,7 +1,8 @@
 """Run Claude Code headless and read its structured answer.
 
 The model never receives the Gitea token: the subprocess gets an allowlisted
-environment, only read-only tools, and returns JSON that this action posts.
+environment and returns JSON that this action posts. Tools are restricted unless
+the workflow explicitly enables YOLO mode.
 """
 
 from __future__ import annotations
@@ -9,9 +10,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any
+
+from .progress import ProgressLog, run_stream
 
 BEGIN = "BEGIN_GITEA_REVIEW_JSON"
 END = "END_GITEA_REVIEW_JSON"
@@ -67,15 +69,17 @@ def claude_env(source: dict[str, str] | None = None) -> dict[str, str]:
     }
 
 
-def build_command(claude_bin: str, model: str, max_turns: int, allowed_bash: list[str]) -> list[str]:
+def build_command(claude_bin: str, model: str, max_turns: int, allowed_bash: list[str], *, yolo: bool = False) -> list[str]:
     allowed = READ_ONLY_TOOLS + [f"Bash({pattern})" for pattern in allowed_bash]
     cmd = [
         claude_bin, "-p",
-        "--output-format", "json",
+        "--output-format", "stream-json", "--verbose",
         "--max-turns", str(max_turns),
-        "--allowedTools", ",".join(allowed),
-        "--disallowedTools", ",".join(DENIED_TOOLS),
     ]
+    if yolo:
+        cmd += ["--dangerously-skip-permissions"]
+    else:
+        cmd += ["--allowedTools", ",".join(allowed), "--disallowedTools", ",".join(DENIED_TOOLS)]
     if model:
         cmd += ["--model", model]
     return cmd
@@ -128,20 +132,21 @@ def parse_answer(text: str) -> ClaudeAnswer:
 
 
 def run_claude(prompt: str, cmd: list[str], cwd: str, timeout_s: int) -> ClaudeAnswer:
-    proc = subprocess.run(
-        cmd, input=prompt, text=True, capture_output=True, cwd=cwd, env=claude_env(), timeout=timeout_s
-    )
-    if proc.returncode != 0:
-        # Failed processes can still print text or a JSON envelope. Neither is a
-        # completed review; use stdout only when stderr has no diagnostic.
-        detail = proc.stderr.strip() or proc.stdout.strip()
-        raise RuntimeError(f"Claude Code exited with {proc.returncode}: {detail[-1500:]}")
-    try:
-        envelope = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return parse_answer(proc.stdout)
+    log = ProgressLog("Claude")
+    envelope = None
+
+    def receive(event: dict) -> None:
+        nonlocal envelope
+        if event.get("type") == "result":
+            envelope = event
+
+    code = run_stream(cmd, prompt, cwd, claude_env(), timeout_s, log, receive)
+    if code != 0:
+        raise RuntimeError(f"Claude Code exited with {code}; see redacted progress logs")
+    if envelope is None:
+        raise ValueError("Claude Code completed without a result event")
     if envelope.get("is_error"):
-        raise RuntimeError(f"Claude Code reported an error: {str(envelope.get('result', ''))[:1500]}")
+        raise RuntimeError(f"Claude Code reported an error: {log.redact(str(envelope.get('result', '')))[:1500]}")
     answer = parse_answer(str(envelope.get("result", "")))
     answer.cost_usd = envelope.get("total_cost_usd")
     answer.turns = envelope.get("num_turns")

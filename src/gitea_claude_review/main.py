@@ -31,6 +31,7 @@ class Config:
     workspace: str
     model: str = ""
     claude_bin: str = "claude"
+    claude_yolo: bool = False
     rules_file: str = ".gitea/claude/REVIEW.md"
     review_id: str = ""
     extra_prompt: str = ""
@@ -70,11 +71,11 @@ def _bool(value: str, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _codex_yolo(value: str) -> bool:
+def _yolo(value: str, name: str) -> bool:
     # Permission settings must reject typos instead of silently selecting a mode.
     normalized = value.strip().lower()
     if normalized not in ("", "true", "false"):
-        raise ValueError("codex_yolo must be true or false")
+        raise ValueError(f"{name} must be true or false")
     return normalized == "true"
 
 
@@ -93,6 +94,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         workspace=env.get("GITHUB_WORKSPACE") or os.getcwd(),
         model=get("MODEL"),
         claude_bin=get("CLAUDE_BIN") or "claude",
+        claude_yolo=_yolo(get("CLAUDE_YOLO"), "claude_yolo"),
         rules_file=get("RULES_FILE") or ".gitea/claude/REVIEW.md",
         review_id=get("REVIEW_ID"),
         extra_prompt=get("EXTRA_PROMPT"),
@@ -110,7 +112,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         provider=(get("PROVIDER") or "claude").lower(),
         codex_bin=get("CODEX_BIN") or "codex",
         codex_effort=get("CODEX_EFFORT"),
-        codex_yolo=_codex_yolo(get("CODEX_YOLO")),
+        codex_yolo=_yolo(get("CODEX_YOLO"), "codex_yolo"),
         codex_auth_mode=get("CODEX_AUTH_MODE") or "chatgpt",
         codex_home=get("CODEX_HOME"),
         codex_auth_json=get("CODEX_AUTH_JSON"),
@@ -212,8 +214,9 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
             yolo=cfg.codex_yolo,
         )
     elif cfg.provider == "claude":
-        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)
-        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns)")
+        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash, yolo=cfg.claude_yolo)
+        mode = "YOLO" if cfg.claude_yolo else "read-only"
+        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns, mode: {mode})")
         answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
     else:
         raise ValueError("provider must be claude or codex")

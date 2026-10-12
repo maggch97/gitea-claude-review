@@ -17,7 +17,7 @@ Existing workflows continue to use Claude; select `provider: codex` to switch.
 - **No third-party action and no dependencies**: a composite action that installs
   selected CLI and runs a small standard-library Python module.
 - **The Gitea token is excluded from the model process environment.** Claude uses
-  read-only tools; Codex defaults to a read-only sandbox, with an explicit YOLO option.
+  read-only tools by default; both providers have an explicit YOLO option.
   This action posts the results, not the model.
 
 It is written for Gitea's API (line-number anchors, `/pulls/{n}.diff`, no
@@ -171,6 +171,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `model` | selected CLI default | Model id or alias. |
 | `claude_code_version` | `stable` | Version passed to the official installer; pin it (e.g. `2.1.284`) for reproducible runs. |
 | `claude_code_executable` | — | Use an existing binary instead of installing. |
+| `claude_yolo` | `false` | Skip permission prompts and omit Claude tool allow/deny lists. |
 | `codex_version` | `0.162.0` | Pinned npm CLI version; needs Node.js/npm on Linux. |
 | `codex_executable` | — | Existing CLI, supporting `--ignore-user-config` / `--ignore-rules`. |
 | `codex_yolo` | `false` | Run without sandboxing or approval prompts. Values must be `true` / `false`. |
@@ -206,9 +207,12 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `pull_request` | Skip runs whose commit is no longer the PR head (a newer push reviews it), and `edited` events unless the title lost its `WIP:` marker → skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run the selected reviewer with the rules and the bot's open findings → if the PR moved on meanwhile, discard the results → mark the findings the reviewer verified as fixed (banner, and resolve on Gitea 1.26+) → edit the summary comment → post new inline findings in one review. Findings a person resolved are never touched or posted again. |
 | `issue_comment` with the trigger phrase | Ignore the bot's own comments and commenters below `mention_permission` → on pull requests check out the head and provide the diff → the reviewer answers the request → reply comment, plus inline findings if any. |
 
-Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
+Claude is invoked as `claude -p --output-format stream-json --verbose` with `Read`, `Grep`,
 `Glob`, `LS` and the `allowed_bash` patterns; `Edit`, `Write`, `WebFetch`,
-`WebSearch` and sub-agents are denied. It must end its answer with a JSON block
+`WebSearch` and sub-agents are denied by default. With `claude_yolo: "true"`,
+the action instead passes `--dangerously-skip-permissions` and omits both tool
+lists (`allowed_bash` no longer restricts commands). The review-only instruction,
+credential isolation, timeout and turn limit remain. It must end its answer with a JSON block
 (`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
 as fixed); a missing block is posted as plain text with a warning.
 
@@ -251,6 +255,29 @@ with:
   trigger_phrase: "@design-review"
   inline_comments: "false"
 ```
+
+## Live progress logs
+
+The Claude installer prints separate download, installation and executable-check
+stages. Download attempts have a 20-second connect timeout and 60-second overall
+timeout, with one retry; installation has a five-minute timeout. A failed stage
+fails the job. `claude_code_executable` skips installation when a binary is supplied.
+
+Both backends stream progress to the Actions job log by default. Claude uses
+`--output-format stream-json --verbose`; Codex uses its existing `--json` events.
+Logs show assistant text, tool calls and results, command completion, and CLI
+diagnostics while the process is running. They do not make additional model calls.
+Reasoning/thinking blocks, input prompts and unknown protocol payloads are not
+printed. The final result still goes through the existing review parser before
+anything is posted to Gitea; a missing Claude result event fails the run.
+
+Known environment credentials, current Codex auth tokens (including refreshed
+tokens), and common token formats are redacted before logging or clipping. Each
+entry is capped at 6,000 characters with a truncation marker, and every line has a
+provider prefix so tool text cannot act as a CI workflow command. Tool output can
+contain repository source; job-log access should match repository access. This
+is diagnostic logging, not a guarantee of detecting arbitrary secrets embedded
+in source files. Logs are not added to either reviewer's prompt.
 
 ## Security notes
 
