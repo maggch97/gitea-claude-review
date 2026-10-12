@@ -341,8 +341,9 @@ class AuthenticationFailureTest(unittest.TestCase):
         # Claude can report is_error in a JSON envelope even with exit code 0.
         # Exercise the real parser and event dispatch, not only an injected exception.
         error = "Failed to authenticate. API Error: 401 OAuth access token has been revoked."
-        process = subprocess.CompletedProcess(["claude"], 0,
-                                              json.dumps({"is_error": True, "result": error}), "")
+        def stream(cmd, prompt, cwd, env, timeout, log, receive):
+            receive({"type": "result", "is_error": True, "result": error})
+            return 0
         events = {
             "pull_request": {"pull_request": {"number": 7}},
             "issue_comment": {"comment": {"id": 10, "user": {"login": "alice"}, "body": "@claude review"},
@@ -361,7 +362,7 @@ class AuthenticationFailureTest(unittest.TestCase):
                             mock.patch.object(main, "Gitea", return_value=server.client()), \
                             mock.patch.object(main, "checkout_pull_head"), \
                             mock.patch.object(main, "strip_checkout_credentials"), \
-                            mock.patch.object(main.claude.subprocess, "run", return_value=process), \
+                            mock.patch.object(main.claude, "run_stream", side_effect=stream), \
                             mock.patch.object(main, "annotate") as annotate:
                         self.assertEqual(main.main(), 1)
                         kind, message = annotate.call_args.args

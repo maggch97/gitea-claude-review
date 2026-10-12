@@ -147,6 +147,17 @@ provider 不会自动隔离命名空间；相同 id 表示有意共享历史并�
 设计审查可配置 `fail_on: high`、`inline_comments: false`；文件级问题用 `line: 0` 明确表示没有单行位置，
 只发到总评论，不伪造代码行号。
 
+## 实时进度日志
+
+Claude 与 Codex 默认实时输出模型文字反馈、工具调用与结果、命令完成状态和 CLI 诊断信息，
+无需增加模型调用。Claude 使用 `stream-json --verbose`，Codex 消费现有 JSONL 事件。
+不输出 thinking/reasoning 块、输入 prompt 或未知协议载荷；日志不会被放入其他审查的上下文。
+最终结果仍经原有解析与发布流程处理，Claude 缺少最终 result 事件时直接失败。
+
+打印前对环境中的已知凭证、当前 Codex 认证 token（包括刷新后的 token）和常见 token 格式脱敏。
+每条最多 6,000 字符，超出时明确标记截断；每行添加 provider 前缀，防止工具文本被当作 CI 指令。
+工具结果可能包含仓库源码，日志访问权限应与仓库一致；脱敏不能保证识别源码里的任意未知秘密。
+
 ## 安全设计
 
 - 模型环境采用白名单，排除 Gitea 审查和 Secret 管理 token。Codex 只接收显式选择的认证凭据。

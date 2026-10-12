@@ -252,6 +252,24 @@ with:
   inline_comments: "false"
 ```
 
+## Live progress logs
+
+Both backends stream progress to the Actions job log by default. Claude uses
+`--output-format stream-json --verbose`; Codex uses its existing `--json` events.
+Logs show assistant text, tool calls and results, command completion, and CLI
+diagnostics while the process is running. They do not make additional model calls.
+Reasoning/thinking blocks, input prompts and unknown protocol payloads are not
+printed. The final result still goes through the existing review parser before
+anything is posted to Gitea; a missing Claude result event fails the run.
+
+Known environment credentials, current Codex auth tokens (including refreshed
+tokens), and common token formats are redacted before logging or clipping. Each
+entry is capped at 6,000 characters with a truncation marker, and every line has a
+provider prefix so tool text cannot act as a CI workflow command. Tool output can
+contain repository source; job-log access should match repository access. This
+is diagnostic logging, not a guarantee of detecting arbitrary secrets embedded
+in source files. Logs are not added to either reviewer's prompt.
+
 ## Security notes
 
 - The Claude process receives only `PATH`, `HOME`, locale, proxy, `ANTHROPIC_*

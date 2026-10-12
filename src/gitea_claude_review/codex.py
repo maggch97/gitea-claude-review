@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import json
 import os
-import signal
-import subprocess
 import tempfile
 import time
 from contextlib import contextmanager
@@ -19,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable
 
 from .claude import ClaudeAnswer, Finding, Resolution, SEVERITIES
+from .progress import ProgressLog, run_stream
 
 
 def _object(properties: dict) -> dict:
@@ -180,25 +179,12 @@ def account_lock(home: Path, deadline: float):
         os.close(fd)
 
 
-def _execute(cmd: list[str], prompt: str, cwd: str, env: dict, timeout_s: float) -> None:
+def _execute(cmd: list[str], prompt: str, cwd: str, env: dict, timeout_s: float, log: ProgressLog) -> None:
     if timeout_s <= 0:
         raise TimeoutError("Codex review timeout elapsed while waiting for authentication")
-    with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, encoding="utf-8", cwd=cwd, env=env,
-                          start_new_session=os.name != "nt") as process:
-        try:
-            process.communicate(prompt, timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            # Kill agent-spawned shell commands too, before releasing the auth lock.
-            if os.name != "nt":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-            process.communicate()
-            raise TimeoutError("Codex review exceeded timeout_minutes") from None
-        if process.returncode:
-            # Never echo the transcript/stderr: either can contain account tokens.
-            raise RuntimeError(f"Codex exited with {process.returncode}; check CLI version, auth and model access")
+    code = run_stream(cmd, prompt, cwd, env, timeout_s, log, lambda event: None)
+    if code:
+        raise RuntimeError(f"Codex exited with {code}; see redacted progress logs")
 
 
 def run_codex(prompt: str, binary: str, model: str, effort: str, cwd: str, timeout_s: int,
@@ -244,14 +230,16 @@ def run_codex(prompt: str, binary: str, model: str, effort: str, cwd: str, timeo
                 auth_path = run_home / "auth.json"
                 _atomic_write(auth_path, current)
                 try:
-                    _execute(cmd, prompt, cwd, env, deadline - time.monotonic())
+                    log = ProgressLog("Codex", secrets,
+                                      lambda: list(read_auth(auth_path.read_text(encoding="utf-8"))["tokens"].values()))
+                    _execute(cmd, prompt, cwd, env, deadline - time.monotonic(), log)
                 finally:
                     refreshed = auth_path.read_text(encoding="utf-8")
                     secrets.extend(read_auth(refreshed)["tokens"].values())
                     if refreshed != current:
                         save(refreshed)
         else:
-            _execute(cmd, prompt, cwd, env, deadline - time.monotonic())
+            _execute(cmd, prompt, cwd, env, deadline - time.monotonic(), ProgressLog("Codex", secrets))
         if not output.is_file():
             raise ValueError("Codex completed without a review result file")
         text = output.read_text(encoding="utf-8")
