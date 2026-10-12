@@ -263,8 +263,10 @@ a job-specific directory, directly at the requested version. The native bootstra
 script is not used: it downloads the latest CLI before installing the requested
 release. npm is required on the runner. Channel names (`stable` / `latest`) are
 resolved to a concrete version using the official release endpoint first.
-Installation shows npm HTTP download logs, limits each fetch to 60 seconds with
-one retry, and has a ten-minute overall timeout. Failures stop the job.
+Installation shows npm HTTP download logs, limits each fetch to five minutes with
+one retry, and has a fifteen-minute overall timeout. The Linux native package is
+a required dependency so download failures stop the job. The official binary
+linking script is invoked explicitly regardless of npm lifecycle approval defaults.
 `claude_code_executable` still skips installation when a binary is supplied.
 
 Both backends stream progress to the Actions job log by default. Claude uses
