@@ -112,10 +112,15 @@ class CodexContractTest(unittest.TestCase):
 
     def test_config_and_prompt_route_to_codex(self):
         cfg = main.load_config({"GCR_PROVIDER": "codex", "GCR_CODEX_AUTH_MODE": "api-key",
-                                "GCR_OPENAI_API_KEY": "chosen-key", "GCR_CODEX_EFFORT": "high"})
+                                "GCR_OPENAI_API_KEY": "chosen-key", "GCR_CODEX_EFFORT": "high",
+                                "GCR_MODEL": "gpt-6.1-sol"})
         self.assertEqual((cfg.provider, cfg.codex_auth_mode, cfg.openai_api_key), ("codex", "api-key", "chosen-key"))
-        with mock.patch.object(codex, "run_codex", return_value=codex.parse_answer(json.dumps(RESULT))) as run:
+        with mock.patch.object(codex, "run_codex", return_value=codex.parse_answer(json.dumps(RESULT))) as run, \
+                mock.patch.object(main, "log") as log:
             main.run_model(cfg, "rules\n" + prompts.OUTPUT_CONTRACT)
+        self.assertEqual(run.call_args.args[2:4], ("gpt-6.1-sol", "high"))
+        self.assertIn("gpt-6.1-sol", log.call_args_list[0].args[0])
+        self.assertIn("effort: high", log.call_args_list[0].args[0])
         prompt = run.call_args.args[0]
         self.assertNotIn("BEGIN_GITEA_REVIEW_JSON", prompt)
         self.assertIn(prompts.CODEX_OUTPUT_CONTRACT, prompt)

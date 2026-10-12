@@ -13,7 +13,7 @@
   （需 Gitea 1.26+，这是第一个有解决对话 API 的版本；更早的版本只加标记）。被人手动解决的评论不动、也不再重发。
 - **在任意 issue 或 PR 评论里 `@claude`**，可以提问或要求重新审查。
 - **不依赖第三方审查 action**：一个组合 action，安装所选 CLI 后运行只用标准库的 Python。
-- **Gitea 令牌不交给模型**：Claude 用只读工具，Codex 默认用只读 sandbox，也可显式开启 YOLO，由本 action 负责发评论。
+- **Gitea 令牌不交给模型**：Claude 默认用只读工具，Codex 默认用只读 sandbox；两者均可显式开启 YOLO，由本 action 负责发评论。
 
 按 Gitea 的 API 设计（行号锚点、`/pulls/{n}.diff`、没有 GraphQL），不是从只支持 GitHub 的 action 移植过来的。
 
@@ -100,7 +100,9 @@ Action 会检查仓库是否私有。Action 源码可继续在公开 GitHub 仓�
 | 工作空间 token | `codex_auth_mode: access-token` + `codex_access_token` | Business / Enterprise 的 Codex 访问令牌 |
 
 Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号。进程失败、超时、缺少结果或非法 JSON
-都会让任务失败，不受旧的 `fail_on_error: false` 影响，也不会发布不完整结果。
+都会让任务失败，也不会发布不完整结果。Claude 运行错误也一律失败，包括 OAuth token 被撤销、
+HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error` 已弃用，仅保留输入兼容，
+即使显式填写 `false` 也不能把未完成的审查标为成功。审查发现的问题级别仍由 `fail_on` 控制。
 `max_turns`、`allowed_bash` 只对 Claude 生效；Codex 用超时限制，不伪造金额或 Claude 轮数。
 设置 `codex_yolo: true` 后使用 `--dangerously-bypass-approvals-and-sandbox`，关闭沙盒和审批；
 此时只做审查由提示词约束，不再由文件系统或网络隔离保证。默认值为 `false`，非法值直接报错。
@@ -117,6 +119,7 @@ Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号
 | `provider` | `claude` | 后端：`claude` / `codex` |
 | `model` | 所选 CLI 默认 | 模型 id 或别名 |
 | `claude_code_version` | `stable` | 建议固定版本（如 `2.1.284`），结果可复现 |
+| `claude_yolo` | `false` | 跳过权限确认，不传工具允许/禁止列表；此时 `allowed_bash` 不限制命令。保留审查任务约束、凭证隔离、超时和轮数限制 |
 | `rules_file` | `.gitea/claude/REVIEW.md` | 仓库里的审查规则文件，不存在时用内置通用规则 |
 | `language` | — | 评论语言，例如 `Simplified Chinese` |
 | `review_id` | — | 评论标记的命名空间。同一个 PR 上要跑多条互不干扰的 review（如正确性 + 设计）时，给每条审查不同的 id，并配不同的 `trigger_phrase` |
@@ -129,17 +132,41 @@ Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号
 正确性与设计审查可以共用机器人，用 `review_id: design` 隔离设计总评论、行级问题和修复标记；
 空 id 保持已有评论标记，Claude 切到 Codex 后也能继续更新。触发词分别设置，避免同一条评论启动两种审查。
 
+Claude 与 Codex 独立审查时，每个 job 必须使用不同的 `review_id`，例如
+`codex-correctness`、`codex-design`、`claude-correctness`、`claude-design`。
+provider 不会自动隔离命名空间；相同 id 表示有意共享历史并更新同一条总评论。
+已有 job 可以保留原 id，新 job 使用独立 id。
+
+自动审查只接收自身命名空间的未解决 findings。提问回复只接收人工讨论和本审查带归属标记的回复，
+排除所有总评论、其他命名空间的回复，以及无法确定归属的旧机器人回复。
+其他机器人账号发布的带标记评论或带 Claude/Codex review 页脚的旧回复也被排除，过滤发生在文本截断之前。
+隔离范围是 action 自动提供的评论历史；人工在当前提问或 PR 正文中引用另一份审查的文字不会被自动删改。
+
 共用同一份 ChatGPT 登录时，在同一个工作流内设置 workflow 级并发分组，并用 `needs` 串行安排审查 job。
 独立工作流共用并发分组会竞争等待位置，可能取消对方的等待运行。
 两条审查使用同一个固定 Action 版本和相同认证配置，并可分别设为必需检查。
 设计审查可配置 `fail_on: high`、`inline_comments: false`；文件级问题用 `line: 0` 明确表示没有单行位置，
 只发到总评论，不伪造代码行号。
 
+## 实时进度日志
+
+Claude 安装分别输出下载、安装和可执行文件检查阶段。下载连接超时 20 秒、单次总超时 60 秒，
+最多重试一次；安装限时五分钟，失败直接终止 job。设置 `claude_code_executable` 可使用已有程序跳过安装。
+
+Claude 与 Codex 默认实时输出模型文字反馈、工具调用与结果、命令完成状态和 CLI 诊断信息，
+无需增加模型调用。Claude 使用 `stream-json --verbose`，Codex 消费现有 JSONL 事件。
+不输出 thinking/reasoning 块、输入 prompt 或未知协议载荷；日志不会被放入其他审查的上下文。
+最终结果仍经原有解析与发布流程处理，Claude 缺少最终 result 事件时直接失败。
+
+打印前对环境中的已知凭证、当前 Codex 认证 token（包括刷新后的 token）和常见 token 格式脱敏。
+每条最多 6,000 字符，超出时明确标记截断；每行添加 provider 前缀，防止工具文本被当作 CI 指令。
+工具结果可能包含仓库源码，日志访问权限应与仓库一致；脱敏不能保证识别源码里的任意未知秘密。
+
 ## 安全设计
 
 - 模型环境采用白名单，排除 Gitea 审查和 Secret 管理 token。Codex 只接收显式选择的认证凭据。
 - 运行审查前清掉 checkout 写进 `.git/config` 的凭证；拉取 PR 分支时用一次性的请求头，不落盘。
-- PR 内容视为不可信输入；提示词要求忽略其中的指令，CLI 限制为只读，Action 校验并发布结果。
+- PR 内容视为不可信输入；提示词要求忽略其中的指令，CLI 默认限制为只读（YOLO 模式除外），Action 校验并发布结果。
 - 评论触发需要 `mention_permission`（默认写权限），陌生人无法通过评论消耗模型额度。
 
 ## 开发

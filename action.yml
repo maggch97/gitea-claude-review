@@ -37,6 +37,10 @@ inputs:
     description: Use an existing Claude Code binary instead of installing one.
     required: false
     default: ""
+  claude_yolo:
+    description: Skip Claude permission prompts and omit the action's tool allow/deny lists (true / false).
+    required: false
+    default: "false"
   codex_version:
     description: Version of @openai/codex to install. Node.js and npm must be available on the Linux runner.
     required: false
@@ -134,9 +138,9 @@ inputs:
     required: false
     default: none
   fail_on_error:
-    description: Fail on Claude review errors (default false, warning). Codex errors always fail the job.
+    description: Deprecated compatibility input. Claude and Codex execution errors always fail the job, including when false.
     required: false
-    default: "false"
+    default: "true"
   show_cost:
     description: Show cost and turns in the comment footer.
     required: false
@@ -163,7 +167,14 @@ runs:
           "$CLAUDE_EXECUTABLE" --version
           exit 0
         fi
-        curl -fsSL https://claude.ai/install.sh | bash -s "$CLAUDE_VERSION"
+        installer="$(mktemp)"
+        trap 'rm -f "$installer"' EXIT
+        echo "Downloading Claude Code installer (60s per attempt, one retry)..."
+        curl -fsSL --connect-timeout 20 --max-time 60 --retry 1 \
+          https://claude.ai/install.sh -o "$installer"
+        echo "Installing Claude Code $CLAUDE_VERSION (5 minute timeout)..."
+        timeout --signal=TERM --kill-after=10s 300 bash "$installer" "$CLAUDE_VERSION"
+        echo "Claude Code installation completed; checking executable..."
         bin="$HOME/.local/bin/claude"
         "$bin" --version
         echo "bin=$bin" >> "$GITHUB_OUTPUT"
@@ -199,6 +210,7 @@ runs:
         GCR_GITEA_TOKEN: ${{ inputs.gitea_token }}
         GCR_SERVER_URL: ${{ inputs.server_url }}
         GCR_CLAUDE_BIN: ${{ steps.claude.outputs.bin }}
+        GCR_CLAUDE_YOLO: ${{ inputs.claude_yolo }}
         GCR_PROVIDER: ${{ inputs.provider }}
         GCR_CODEX_BIN: ${{ steps.codex.outputs.bin }}
         GCR_CODEX_EFFORT: ${{ inputs.codex_effort }}

@@ -17,7 +17,7 @@ Existing workflows continue to use Claude; select `provider: codex` to switch.
 - **No third-party action and no dependencies**: a composite action that installs
   selected CLI and runs a small standard-library Python module.
 - **The Gitea token is excluded from the model process environment.** Claude uses
-  read-only tools; Codex defaults to a read-only sandbox, with an explicit YOLO option.
+  read-only tools by default; both providers have an explicit YOLO option.
   This action posts the results, not the model.
 
 It is written for Gitea's API (line-number anchors, `/pulls/{n}.diff`, no
@@ -145,8 +145,10 @@ Neither mode reuses ambient runner credentials.
 
 Codex enforces a JSON Schema with `summary`, `findings[]` and `resolved[]`; the
 action validates fields, enum values, line numbers and paths again. Missing or
-invalid results and nonzero CLI exits **always fail the job**, even when the
-legacy Claude `fail_on_error` option is false. No incomplete/plain-text Codex
+invalid results and nonzero CLI exits **always fail the job**. Claude execution
+errors also always fail, even when the deprecated `fail_on_error` input is false.
+Authentication errors (including revoked OAuth tokens / HTTP 401), timeouts and
+Gitea API errors are failed checks, not warnings. No incomplete/plain-text Codex
 answer is published. Codex does not report monetary cost or a Claude-style turn
 count, so those fields are omitted. `max_turns` and `allowed_bash` apply only to
 Claude; Codex uses `timeout_minutes`. Set `codex_yolo: true` to pass
@@ -169,6 +171,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `model` | selected CLI default | Model id or alias. |
 | `claude_code_version` | `stable` | Version passed to the official installer; pin it (e.g. `2.1.284`) for reproducible runs. |
 | `claude_code_executable` | — | Use an existing binary instead of installing. |
+| `claude_yolo` | `false` | Skip permission prompts and omit Claude tool allow/deny lists. |
 | `codex_version` | `0.162.0` | Pinned npm CLI version; needs Node.js/npm on Linux. |
 | `codex_executable` | — | Existing CLI, supporting `--ignore-user-config` / `--ignore-rules`. |
 | `codex_yolo` | `false` | Run without sandboxing or approval prompts. Values must be `true` / `false`. |
@@ -193,7 +196,7 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `inline_comments` | `true` | Post anchored findings as inline review comments. |
 | `wip_policy` | `skip` | Draft or `WIP:` pull requests: `skip` or `fail`. |
 | `fail_on` | `none` | Fail the job when a finding reaches `low` / `medium` / `high` / `blocker`. |
-| `fail_on_error` | `false` | Claude errors: fail or warn. Codex errors always fail. |
+| `fail_on_error` | `true` | Deprecated compatibility input; execution errors always fail for both backends, even when `false`. |
 | `show_cost` | `false` | Show cost and turns in the comment footer. |
 | `server_url` | the workflow's server | Gitea base URL. |
 
@@ -204,9 +207,12 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `pull_request` | Skip runs whose commit is no longer the PR head (a newer push reviews it), and `edited` events unless the title lost its `WIP:` marker → skip drafts / `WIP:` titles → check out the PR head → write the diff to `.gitea-claude-review/pr-<n>.diff` → run the selected reviewer with the rules and the bot's open findings → if the PR moved on meanwhile, discard the results → mark the findings the reviewer verified as fixed (banner, and resolve on Gitea 1.26+) → edit the summary comment → post new inline findings in one review. Findings a person resolved are never touched or posted again. |
 | `issue_comment` with the trigger phrase | Ignore the bot's own comments and commenters below `mention_permission` → on pull requests check out the head and provide the diff → the reviewer answers the request → reply comment, plus inline findings if any. |
 
-Claude is invoked as `claude -p --output-format json` with `Read`, `Grep`,
+Claude is invoked as `claude -p --output-format stream-json --verbose` with `Read`, `Grep`,
 `Glob`, `LS` and the `allowed_bash` patterns; `Edit`, `Write`, `WebFetch`,
-`WebSearch` and sub-agents are denied. It must end its answer with a JSON block
+`WebSearch` and sub-agents are denied by default. With `claude_yolo: "true"`,
+the action instead passes `--dangerously-skip-permissions` and omits both tool
+lists (`allowed_bash` no longer restricts commands). The review-only instruction,
+credential isolation, timeout and turn limit remain. It must end its answer with a JSON block
 (`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
 as fixed); a missing block is posted as plain text with a warning.
 
@@ -216,6 +222,20 @@ Independent reviews can share one pull request and bot account. Give the design
 review its own `review_id`: summaries, findings and fixed banners are tracked
 separately. Give it its own `trigger_phrase` too. An empty id preserves comments
 from earlier versions, including when switching from Claude to Codex.
+
+For independent Claude and Codex reviews, assign a different `review_id` to every
+job (for example `codex-correctness`, `codex-design`, `claude-correctness`, and
+`claude-design`). Providers do not implicitly namespace comments: reusing an id
+deliberately shares history and updates the same summary. Existing jobs can keep
+their ids while new jobs receive unique ones.
+
+Automatic reviews receive only their own namespace's open findings. Mention
+replies receive human discussion and replies marked as belonging to the same
+review, excluding all review summaries, other namespaces' replies and unmarked
+bot replies whose ownership cannot be determined. Marked comments from other bot
+accounts and legacy Claude/Codex review footers are also excluded. Filtering
+happens before context truncation. This isolates action-supplied comment history;
+it does not redact another review manually quoted in a human request or PR text.
 
 When sharing a ChatGPT login on Gitea, put the review jobs in one workflow with
 workflow-level concurrency and chain them using `needs`. Separate workflows in
@@ -236,6 +256,29 @@ with:
   inline_comments: "false"
 ```
 
+## Live progress logs
+
+The Claude installer prints separate download, installation and executable-check
+stages. Download attempts have a 20-second connect timeout and 60-second overall
+timeout, with one retry; installation has a five-minute timeout. A failed stage
+fails the job. `claude_code_executable` skips installation when a binary is supplied.
+
+Both backends stream progress to the Actions job log by default. Claude uses
+`--output-format stream-json --verbose`; Codex uses its existing `--json` events.
+Logs show assistant text, tool calls and results, command completion, and CLI
+diagnostics while the process is running. They do not make additional model calls.
+Reasoning/thinking blocks, input prompts and unknown protocol payloads are not
+printed. The final result still goes through the existing review parser before
+anything is posted to Gitea; a missing Claude result event fails the run.
+
+Known environment credentials, current Codex auth tokens (including refreshed
+tokens), and common token formats are redacted before logging or clipping. Each
+entry is capped at 6,000 characters with a truncation marker, and every line has a
+provider prefix so tool text cannot act as a CI workflow command. Tool output can
+contain repository source; job-log access should match repository access. This
+is diagnostic logging, not a guarantee of detecting arbitrary secrets embedded
+in source files. Logs are not added to either reviewer's prompt.
+
 ## Security notes
 
 - The Claude process receives only `PATH`, `HOME`, locale, proxy, `ANTHROPIC_*
@@ -254,7 +297,7 @@ with:
 - Comment triggers require `mention_permission` (default `write`), so strangers
   cannot spend your model quota.
 - Gitea may not pass secrets to workflows triggered from forks; reviews of fork
-  pull requests then fail (Claude can warn according to `fail_on_error`).
+  pull requests then fail.
 
 ## Development
 

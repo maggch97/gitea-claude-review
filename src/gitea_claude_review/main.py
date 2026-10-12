@@ -31,6 +31,7 @@ class Config:
     workspace: str
     model: str = ""
     claude_bin: str = "claude"
+    claude_yolo: bool = False
     rules_file: str = ".gitea/claude/REVIEW.md"
     review_id: str = ""
     extra_prompt: str = ""
@@ -43,7 +44,8 @@ class Config:
     inline_comments: bool = True
     wip_policy: str = "skip"
     fail_on: str = "none"
-    fail_on_error: bool = False
+    # Kept for existing callers; execution failures always fail the job.
+    fail_on_error: bool = True
     show_cost: bool = False
     provider: str = "claude"
     codex_bin: str = "codex"
@@ -69,11 +71,11 @@ def _bool(value: str, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _codex_yolo(value: str) -> bool:
+def _yolo(value: str, name: str) -> bool:
     # Permission settings must reject typos instead of silently selecting a mode.
     normalized = value.strip().lower()
     if normalized not in ("", "true", "false"):
-        raise ValueError("codex_yolo must be true or false")
+        raise ValueError(f"{name} must be true or false")
     return normalized == "true"
 
 
@@ -92,6 +94,7 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         workspace=env.get("GITHUB_WORKSPACE") or os.getcwd(),
         model=get("MODEL"),
         claude_bin=get("CLAUDE_BIN") or "claude",
+        claude_yolo=_yolo(get("CLAUDE_YOLO"), "claude_yolo"),
         rules_file=get("RULES_FILE") or ".gitea/claude/REVIEW.md",
         review_id=get("REVIEW_ID"),
         extra_prompt=get("EXTRA_PROMPT"),
@@ -104,12 +107,12 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         inline_comments=_bool(get("INLINE_COMMENTS"), True),
         wip_policy=(get("WIP_POLICY") or "skip").lower(),
         fail_on=(get("FAIL_ON") or "none").lower(),
-        fail_on_error=_bool(get("FAIL_ON_ERROR"), False),
+        fail_on_error=_bool(get("FAIL_ON_ERROR"), True),
         show_cost=_bool(get("SHOW_COST"), False),
         provider=(get("PROVIDER") or "claude").lower(),
         codex_bin=get("CODEX_BIN") or "codex",
         codex_effort=get("CODEX_EFFORT"),
-        codex_yolo=_codex_yolo(get("CODEX_YOLO")),
+        codex_yolo=_yolo(get("CODEX_YOLO"), "codex_yolo"),
         codex_auth_mode=get("CODEX_AUTH_MODE") or "chatgpt",
         codex_home=get("CODEX_HOME"),
         codex_auth_json=get("CODEX_AUTH_JSON"),
@@ -183,7 +186,8 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
     started = time.monotonic()
     if cfg.provider == "codex":
         mode = "YOLO" if cfg.codex_yolo else "read-only"
-        log(f"Running Codex ({cfg.model or 'default model'}, auth: {cfg.codex_auth_mode}, mode: {mode})")
+        log(f"Running Codex ({cfg.model or 'default model'}, effort: {cfg.codex_effort or 'default'}, "
+            f"auth: {cfg.codex_auth_mode}, mode: {mode})")
         # Codex enforces JSON Schema directly; sentinel lines are Claude's contract.
         prompt = prompt.replace(prompts.OUTPUT_CONTRACT, prompts.CODEX_OUTPUT_CONTRACT)
         persist_auth = None
@@ -210,8 +214,9 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
             yolo=cfg.codex_yolo,
         )
     elif cfg.provider == "claude":
-        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash)
-        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns)")
+        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash, yolo=cfg.claude_yolo)
+        mode = "YOLO" if cfg.claude_yolo else "read-only"
+        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns, mode: {mode})")
         answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
     else:
         raise ValueError("provider must be claude or codex")
@@ -316,11 +321,8 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
         lines = parse_unified_diff(diff_text)
     strip_checkout_credentials(cfg.workspace)
 
-    thread = [
-        f"@{(c.get('user') or {}).get('login', '')}: {(c.get('body') or '')[:1500]}"
-        for c in gitea.issue_comments(number)
-        if c.get("id") != comment.get("id") and not publish.ANY_SUMMARY_RE.search(c.get("body") or "")
-    ]
+    markers = publish.Markers(cfg.review_id)
+    thread = publish.mention_context(gitea.issue_comments(number), comment.get("id"), bot, markers)
     request = body.replace(cfg.trigger_phrase, "", 1).strip() or body
     prompt = prompts.mention_prompt(
         request=request, author=author, issue=issue, pr=pr, diff_file=diff_file,
@@ -332,10 +334,9 @@ def reply_mention(cfg: Config, gitea: Gitea) -> int:
     anchored, loose = publish.split_anchorable(answer.findings, lines) if inline else ([], list(answer.findings))
     quote = "\n".join("> " + line for line in body.strip().splitlines()[:6])
     footer = publish.Footer(head_sha, cfg.model, answer.cost_usd, answer.turns, cfg.show_cost, cfg.reviewer)
-    text = f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
+    text = markers.reply + "\n" + f"{quote}\n\n@{author} {answer.summary}".strip() + publish.loose_section(loose) + publish.footer_text(footer)
     gitea.create_comment(number, text)
     if anchored:
-        markers = publish.Markers(cfg.review_id)
         already = publish.suppressed(publish.posted_findings(gitea, number, bot, markers))
         publish.post_inline(gitea, number, head_sha, anchored, already,
                             cfg.reviewer + ": {count} inline finding(s) for @" + author + ".", markers)
@@ -388,10 +389,10 @@ def main() -> int:
                 raise ValueError("Codex ChatGPT account auth requires a private repository and trusted runner")
         return dispatch(cfg, gitea)
     except Exception as error:  # noqa: BLE001 - surface every failure as one annotation
-        # Keep the published Claude option; new Codex failures always fail the job.
-        failed = cfg.fail_on_error or cfg.provider != "claude"
-        annotate("error" if failed else "warning", f"{cfg.reviewer} review failed: {error}")
-        return 1 if failed else 0
+        # An incomplete review cannot be a successful check, even with the legacy
+        # fail_on_error=false input. Finding severity is controlled by fail_on.
+        annotate("error", f"{cfg.reviewer} review failed: {error}")
+        return 1
 
 
 if __name__ == "__main__":

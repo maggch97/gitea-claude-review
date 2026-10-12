@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -9,7 +10,7 @@ from unittest import mock
 
 from helpers import DIFF
 
-from gitea_claude_review import claude
+from gitea_claude_review import claude, main
 from gitea_claude_review.claude import Finding, Resolution, parse_answer
 from gitea_claude_review.diff import changed_files, parse_unified_diff
 from gitea_claude_review.gitea import Gitea, GiteaError
@@ -81,6 +82,18 @@ class AnswerTest(unittest.TestCase):
             self.assertIn(tool, denied)
             self.assertNotIn(tool, allowed.split(","))
         self.assertEqual(cmd[cmd.index("--model") + 1], "opus")
+        self.assertEqual(cmd[cmd.index("--output-format") + 1], "stream-json")
+        self.assertIn("--verbose", cmd)
+
+    def test_claude_yolo_omits_tool_restrictions_and_rejects_typos(self):
+        cmd = claude.build_command("claude", "opus", 30, ["git diff:*"], yolo=True)
+        self.assertIn("--dangerously-skip-permissions", cmd)
+        self.assertNotIn("--allowedTools", cmd)
+        self.assertNotIn("--disallowedTools", cmd)
+        self.assertTrue(main.load_config({"GCR_CLAUDE_YOLO": "true"}).claude_yolo)
+        self.assertFalse(main.load_config({}).claude_yolo)
+        with self.assertRaisesRegex(ValueError, "claude_yolo"):
+            main.load_config({"GCR_CLAUDE_YOLO": "typo"})
 
 
 class AnchorTest(unittest.TestCase):
@@ -172,6 +185,15 @@ class RetryTest(unittest.TestCase):
 
 
 class SubprocessTest(unittest.TestCase):
+    def test_nonzero_claude_exit_never_publishes_stdout_as_a_review(self):
+        for stdout in ("Partial review text", '{"is_error": false, "result": "Looks fine"}'):
+            def stream(cmd, prompt, cwd, env, timeout, log, receive):
+                receive({"type": "result", "result": stdout, "is_error": False})
+                return 1
+            with self.subTest(stdout=stdout), mock.patch.object(claude, "run_stream", side_effect=stream):
+                with self.assertRaisesRegex(RuntimeError, "Claude Code exited with 1"):
+                    claude.run_claude("review", ["claude"], ".", 30)
+
     def test_claude_runs_without_the_gitea_token_and_envelope_is_read(self):
         # A stand-in for Claude Code: reports the prompt length and any leaked Gitea variables.
         script = textwrap.dedent("""\
@@ -180,7 +202,7 @@ class SubprocessTest(unittest.TestCase):
             leaked = [k for k in os.environ if 'GITEA' in k or k.startswith('GCR_')]
             summary = 'ok ' + str(len(prompt)) + ' ' + ','.join(leaked)
             block = 'BEGIN_GITEA_REVIEW_JSON' + json.dumps({'summary': summary, 'findings': []}) + 'END_GITEA_REVIEW_JSON'
-            print(json.dumps({'result': block, 'is_error': False, 'total_cost_usd': 0.1, 'num_turns': 2}))
+            print(json.dumps({'type': 'result', 'result': block, 'is_error': False, 'total_cost_usd': 0.1, 'num_turns': 2}))
         """)
         with tempfile.TemporaryDirectory() as tmp:
             fake = os.path.join(tmp, "fake_claude.py")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -236,7 +237,7 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(len(self.prompts), 1)
         self.assertIn("why is y 3?", self.prompts[0])
         reply = self.gitea.comments[-1]["body"]
-        self.assertTrue(reply.startswith("> @claude why is y 3?"))
+        self.assertTrue(reply.startswith(publish.Markers().reply + "\n> @claude why is y 3?"))
         self.assertIn("@alice Because x is read twice.", reply)
         self.assertNotIn(publish.Markers().summary, reply)
 
@@ -262,6 +263,59 @@ class FlowTest(unittest.TestCase):
         self.assertIn("<!-- gitea-claude-review:design:finding:", finding)
         self.assertTrue(self.gitea.reviews[-1]["body"].startswith("Codex:"))
 
+    def test_four_review_namespaces_only_receive_their_own_previous_findings(self):
+        reviews = [("codex", ""), ("codex", "design"),
+                   ("claude", "claude-correctness"), ("claude", "claude-design")]
+        for index, (provider, review_id) in enumerate(reviews):
+            self.answer = ClaudeAnswer(summary=f"Summary {index}", findings=[
+                Finding("src/app.py", 3, "new", "high", f"Isolated concern {index}", f"Evidence {index}")])
+            self.review(provider=provider, review_id=review_id)
+            self.assertNotIn("Isolated concern", self.prompts[-1])
+
+        self.answer = ClaudeAnswer(summary="Rechecked")
+        for index, (provider, review_id) in enumerate(reviews):
+            self.review(provider=provider, review_id=review_id)
+            for other in range(4):
+                if other == index:
+                    self.assertIn(f"Isolated concern {other}", self.prompts[-1])
+                else:
+                    self.assertNotIn(f"Isolated concern {other}", self.prompts[-1])
+        self.assertEqual(len(self.gitea.comments), 4)
+        self.assertEqual(len(self.gitea.reviews), 4)
+
+    def test_mentions_only_receive_own_replies_and_human_discussion(self):
+        reviews = [("codex", "", "@codex"), ("codex", "design", "@design-review"),
+                   ("claude", "claude-correctness", "@claude"),
+                   ("claude", "claude-design", "@design-claude")]
+        self.gitea.comments.extend([
+            {"id": 1, "user": {"login": "alice"}, "body": "Human context about requirements"},
+            {"id": 2, "user": {"login": "REVIEW-BOT"}, "body": "Old unmarked reply"},
+            {"id": 3, "user": {"login": "other-bot"},
+             "body": "Legacy other bot answer\n<sub>Claude review · model `opus`</sub>"},
+            {"id": 4, "user": {"login": "other-bot"},
+             "body": "Foreign marked answer" + "x" * 1600 + publish.Markers("foreign").reply},
+            {"id": 55, "user": {"login": "alice"}, "body": "Current event duplicate"},
+        ])
+        for index, (provider, review_id, trigger) in enumerate(reviews):
+            self.answer = ClaudeAnswer(summary=f"Private reply {index}")
+            self.mention("alice", trigger + " explain", provider=provider,
+                         review_id=review_id, trigger_phrase=trigger)
+            self.assertTrue(self.gitea.comments[-1]["body"].startswith(publish.Markers(review_id).reply + "\n"))
+
+        self.answer = ClaudeAnswer(summary="Follow-up answer")
+        for index, (provider, review_id, trigger) in enumerate(reviews):
+            self.mention("alice", trigger + " elaborate", provider=provider,
+                         review_id=review_id, trigger_phrase=trigger)
+            prompt = self.prompts[-1]
+            self.assertIn("Human context about requirements", prompt)
+            for hidden in ("Old unmarked reply", "Legacy other bot answer", "Foreign marked answer", "Current event duplicate"):
+                self.assertNotIn(hidden, prompt)
+            for other in range(4):
+                if other == index:
+                    self.assertIn(f"Private reply {other}", prompt)
+                else:
+                    self.assertNotIn(f"Private reply {other}", prompt)
+
     def test_invalid_review_id_fails_before_anything_runs(self):
         bad = config(self.workspace, "pull_request", {"pull_request": {"number": 7}}, review_id="Design Review")
         with mock.patch.object(main, "load_config", return_value=bad), mock.patch.object(main, "Gitea", return_value=self.gitea.client()):
@@ -269,12 +323,54 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(self.prompts, [])
         self.assertEqual(self.gitea.comments, [])
 
-    def test_errors_become_warnings_unless_fail_on_error(self):
-        broken = config(self.workspace, "pull_request", {"pull_request": {"number": 404}})
-        with mock.patch.object(main, "load_config", return_value=broken), mock.patch.object(main, "Gitea", return_value=self.gitea.client()):
-            self.assertEqual(main.main(), 0)
-            broken.fail_on_error = True
-            self.assertEqual(main.main(), 1)
+    def test_api_errors_always_fail_for_both_backends(self):
+        for provider in ("claude", "codex"):
+            for legacy_setting in (False, True):
+                broken = config(self.workspace, "pull_request", {"pull_request": {"number": 404}},
+                                provider=provider, codex_auth_mode="api-key", fail_on_error=legacy_setting)
+                with self.subTest(provider=provider, fail_on_error=legacy_setting), \
+                        mock.patch.object(main, "load_config", return_value=broken), \
+                        mock.patch.object(main, "Gitea", return_value=self.gitea.client()), \
+                        mock.patch.object(main, "annotate") as annotate:
+                    self.assertEqual(main.main(), 1)
+                    self.assertEqual(annotate.call_args.args[0], "error")
+
+
+class AuthenticationFailureTest(unittest.TestCase):
+    def test_revoked_oauth_token_fails_reviews_and_mentions_without_publishing(self):
+        # Claude can report is_error in a JSON envelope even with exit code 0.
+        # Exercise the real parser and event dispatch, not only an injected exception.
+        error = "Failed to authenticate. API Error: 401 OAuth access token has been revoked."
+        def stream(cmd, prompt, cwd, env, timeout, log, receive):
+            receive({"type": "result", "is_error": True, "result": error})
+            return 0
+        events = {
+            "pull_request": {"pull_request": {"number": 7}},
+            "issue_comment": {"comment": {"id": 10, "user": {"login": "alice"}, "body": "@claude review"},
+                              "issue": {"number": 7, "pull_request": {}}},
+        }
+        with tempfile.TemporaryDirectory() as workspace:
+            for event_name, event in events.items():
+                for legacy_setting in (False, True):
+                    server = FakeGitea()
+                    old_summary = {"id": 20, "body": publish.Markers().summary + "Previous review",
+                                   "user": {"login": server.bot}}
+                    server.comments.append(old_summary.copy())
+                    cfg = config(workspace, event_name, event, fail_on_error=legacy_setting)
+                    with self.subTest(event=event_name, fail_on_error=legacy_setting), \
+                            mock.patch.object(main, "load_config", return_value=cfg), \
+                            mock.patch.object(main, "Gitea", return_value=server.client()), \
+                            mock.patch.object(main, "checkout_pull_head"), \
+                            mock.patch.object(main, "strip_checkout_credentials"), \
+                            mock.patch.object(main.claude, "run_stream", side_effect=stream), \
+                            mock.patch.object(main, "annotate") as annotate:
+                        self.assertEqual(main.main(), 1)
+                        kind, message = annotate.call_args.args
+                        self.assertEqual(kind, "error")
+                        self.assertIn(error, message)
+                    self.assertEqual(server.comments, [old_summary])
+                    self.assertEqual(server.reviews, [])
+                    self.assertFalse(any(method in ("POST", "PATCH") for method, _, _ in server.calls))
 
 
 class CredentialTest(unittest.TestCase):
