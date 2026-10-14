@@ -69,13 +69,13 @@ def claude_env(source: dict[str, str] | None = None) -> dict[str, str]:
     }
 
 
-def build_command(claude_bin: str, model: str, max_turns: int, allowed_bash: list[str], *, yolo: bool = False) -> list[str]:
+def build_command(claude_bin: str, model: str, allowed_bash: list[str], *, yolo: bool = False) -> list[str]:
     allowed = READ_ONLY_TOOLS + [f"Bash({pattern})" for pattern in allowed_bash]
     cmd = [
         claude_bin, "-p",
         "--output-format", "stream-json", "--verbose",
-        "--max-turns", str(max_turns),
     ]
+    # Reviews may need many tool rounds; timeout_s bounds runtime without a turn cap.
     if yolo:
         cmd += ["--dangerously-skip-permissions"]
     else:

@@ -113,10 +113,6 @@ inputs:
     description: Minimum repository permission of a commenter allowed to trigger Claude (read / write / admin).
     required: false
     default: write
-  max_turns:
-    description: Maximum Claude agent turns per run (Codex uses timeout_minutes, no turn cap).
-    required: false
-    default: "30"
   timeout_minutes:
     description: Timeout of the model run in minutes (includes waiting for the Codex account auth lock).
     required: false
@@ -236,7 +232,6 @@ runs:
         GCR_LANGUAGE: ${{ inputs.language }}
         GCR_TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
         GCR_MENTION_PERMISSION: ${{ inputs.mention_permission }}
-        GCR_MAX_TURNS: ${{ inputs.max_turns }}
         GCR_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         GCR_ALLOWED_BASH: ${{ inputs.allowed_bash }}
         GCR_INLINE_COMMENTS: ${{ inputs.inline_comments }}
