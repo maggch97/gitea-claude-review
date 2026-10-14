@@ -74,7 +74,8 @@ class AnswerTest(unittest.TestCase):
         self.assertEqual(env, {"PATH": "/bin", "HOME": "/home/r", "CLAUDE_CODE_OAUTH_TOKEN": "c", "CLAUDE_CODE_FOO": "1"})
 
     def test_command_is_read_only(self):
-        cmd = claude.build_command("claude", "opus", 12, ["git diff:*"])
+        cmd = claude.build_command("claude", "opus", ["git diff:*"])
+        self.assertNotIn("--max-turns", cmd)
         allowed = cmd[cmd.index("--allowedTools") + 1]
         denied = cmd[cmd.index("--disallowedTools") + 1]
         self.assertIn("Bash(git diff:*)", allowed)
@@ -86,7 +87,8 @@ class AnswerTest(unittest.TestCase):
         self.assertIn("--verbose", cmd)
 
     def test_claude_yolo_omits_tool_restrictions_and_rejects_typos(self):
-        cmd = claude.build_command("claude", "opus", 30, ["git diff:*"], yolo=True)
+        cmd = claude.build_command("claude", "opus", ["git diff:*"], yolo=True)
+        self.assertNotIn("--max-turns", cmd)
         self.assertIn("--dangerously-skip-permissions", cmd)
         self.assertNotIn("--allowedTools", cmd)
         self.assertNotIn("--disallowedTools", cmd)

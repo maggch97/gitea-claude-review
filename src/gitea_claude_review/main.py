@@ -38,7 +38,6 @@ class Config:
     language: str = ""
     trigger_phrase: str = "@claude"
     mention_permission: str = "write"
-    max_turns: int = 30
     timeout_minutes: int = 30
     allowed_bash: list[str] = field(default_factory=list)
     inline_comments: bool = True
@@ -101,7 +100,6 @@ def load_config(env: dict[str, str] | None = None) -> Config:
         language=get("LANGUAGE"),
         trigger_phrase=get("TRIGGER_PHRASE") or "@claude",
         mention_permission=(get("MENTION_PERMISSION") or "write").lower(),
-        max_turns=int(get("MAX_TURNS") or 30),
         timeout_minutes=int(get("TIMEOUT_MINUTES") or 30),
         allowed_bash=[p.strip() for p in allowed.split(",") if p.strip()],
         inline_comments=_bool(get("INLINE_COMMENTS"), True),
@@ -214,9 +212,9 @@ def run_model(cfg: Config, prompt: str) -> claude.ClaudeAnswer:
             yolo=cfg.codex_yolo,
         )
     elif cfg.provider == "claude":
-        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.max_turns, cfg.allowed_bash, yolo=cfg.claude_yolo)
+        cmd = claude.build_command(cfg.claude_bin, cfg.model, cfg.allowed_bash, yolo=cfg.claude_yolo)
         mode = "YOLO" if cfg.claude_yolo else "read-only"
-        log(f"Running Claude Code ({cfg.model or 'default model'}, up to {cfg.max_turns} turns, mode: {mode})")
+        log(f"Running Claude Code ({cfg.model or 'default model'}, no turn limit, mode: {mode})")
         answer = claude.run_claude(prompt, cmd, cfg.workspace, cfg.timeout_minutes * 60)
     else:
         raise ValueError("provider must be claude or codex")

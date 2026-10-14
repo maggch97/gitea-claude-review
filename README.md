@@ -150,8 +150,8 @@ errors also always fail, even when the deprecated `fail_on_error` input is false
 Authentication errors (including revoked OAuth tokens / HTTP 401), timeouts and
 Gitea API errors are failed checks, not warnings. No incomplete/plain-text Codex
 answer is published. Codex does not report monetary cost or a Claude-style turn
-count, so those fields are omitted. `max_turns` and `allowed_bash` apply only to
-Claude; Codex uses `timeout_minutes`. Set `codex_yolo: true` to pass
+count, so those fields are omitted. `allowed_bash` applies only to Claude.
+Neither backend has an agent turn cap; both use `timeout_minutes`. Set `codex_yolo: true` to pass
 `--dangerously-bypass-approvals-and-sandbox`, which disables sandboxing and
 approval prompts. Without it, Codex uses a read-only sandbox. In YOLO mode,
 review-only behavior is a prompt instruction, not a filesystem/network boundary.
@@ -190,7 +190,6 @@ deduplication, fixed-finding resolution and stale-PR checks remain the same.
 | `language` | — | Language of the comments, e.g. `Simplified Chinese`. |
 | `trigger_phrase` | `@claude` | Phrase that triggers a reply in comments. |
 | `mention_permission` | `write` | Minimum repository permission of a commenter allowed to trigger Claude (`read` / `write` / `admin`). |
-| `max_turns` | `30` | Claude-only agent turn limit. |
 | `timeout_minutes` | `30` | Model timeout, including waiting for the account auth lock. |
 | `allowed_bash` | read-only git | Bash patterns Claude may run. |
 | `inline_comments` | `true` | Post anchored findings as inline review comments. |
@@ -212,7 +211,7 @@ Claude is invoked as `claude -p --output-format stream-json --verbose` with `Rea
 `WebSearch` and sub-agents are denied by default. With `claude_yolo: "true"`,
 the action instead passes `--dangerously-skip-permissions` and omits both tool
 lists (`allowed_bash` no longer restricts commands). The review-only instruction,
-credential isolation, timeout and turn limit remain. It must end its answer with a JSON block
+credential isolation and timeout remain. It must end its answer with a JSON block
 (`summary` + `findings[]` + `resolved[]`, the ids of earlier findings it verified
 as fixed); a missing block is posted as plain text with a warning.
 

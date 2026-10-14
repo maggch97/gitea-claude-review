@@ -75,6 +75,6 @@ jobs:
           binary = str(Path(os.environ['RUNNER_TEMP']) / 'claude/node_modules/.bin/claude')
           subprocess.run([binary, '--version'], check=True, timeout=30)
           for yolo in (False, True):
-              command = build_command(binary, 'claude-opus-5-5', 30, ['git diff:*'], yolo=yolo)
+              command = build_command(binary, 'claude-opus-5-5', ['git diff:*'], yolo=yolo)
               subprocess.run(command + ['--help'], check=True, timeout=30)
           PY

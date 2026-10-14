@@ -103,7 +103,7 @@ Codex 按 JSON Schema 输出，Action 再校验字段、枚举、路径和行号
 都会让任务失败，也不会发布不完整结果。Claude 运行错误也一律失败，包括 OAuth token 被撤销、
 HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error` 已弃用，仅保留输入兼容，
 即使显式填写 `false` 也不能把未完成的审查标为成功。审查发现的问题级别仍由 `fail_on` 控制。
-`max_turns`、`allowed_bash` 只对 Claude 生效；Codex 用超时限制，不伪造金额或 Claude 轮数。
+`allowed_bash` 只对 Claude 生效；两个后端均不限制调用轮数，只用 `timeout_minutes` 限制运行时间。Codex 不伪造金额或 Claude 轮数。
 设置 `codex_yolo: true` 后使用 `--dangerously-bypass-approvals-and-sandbox`，关闭沙盒和审批；
 此时只做审查由提示词约束，不再由文件系统或网络隔离保证。默认值为 `false`，非法值直接报错。
 
@@ -119,7 +119,7 @@ HTTP 401、超时和 Gitea API 错误；不再降级成 warning。`fail_on_error
 | `provider` | `claude` | 后端：`claude` / `codex` |
 | `model` | 所选 CLI 默认 | 模型 id 或别名 |
 | `claude_code_version` | `stable` | 建议固定版本（如 `2.1.284`），结果可复现 |
-| `claude_yolo` | `false` | 跳过权限确认，不传工具允许/禁止列表；此时 `allowed_bash` 不限制命令。保留审查任务约束、凭证隔离、超时和轮数限制 |
+| `claude_yolo` | `false` | 跳过权限确认，不传工具允许/禁止列表；此时 `allowed_bash` 不限制命令。保留审查任务约束、凭证隔离和超时限制 |
 | `rules_file` | `.gitea/claude/REVIEW.md` | 仓库里的审查规则文件，不存在时用内置通用规则 |
 | `language` | — | 评论语言，例如 `Simplified Chinese` |
 | `review_id` | — | 评论标记的命名空间。同一个 PR 上要跑多条互不干扰的 review（如正确性 + 设计）时，给每条审查不同的 id，并配不同的 `trigger_phrase` |
